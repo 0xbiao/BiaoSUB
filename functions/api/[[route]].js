@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
+import { handle } from 'hono/cloudflare-pages'
 
 const app = new Hono().basePath('/api')
 
@@ -10,12 +11,10 @@ app.onError((err, c) => {
   return c.json({ error: err.message }, 500)
 })
 
-// 获取列表
+// 1. 获取列表
 app.get('/subs', async (c) => {
+  if (!c.env.DB) return c.json({ error: 'DB未绑定' }, 500)
   try {
-    // 双重检查数据库绑定
-    if (!c.env.DB) return c.json({ error: 'Database not bound' }, 500)
-
     const { results } = await c.env.DB.prepare(
       "SELECT * FROM subscriptions ORDER BY created_at DESC"
     ).all()
@@ -25,17 +24,12 @@ app.get('/subs', async (c) => {
   }
 })
 
-// 新增
+// 2. 添加
 app.post('/subs', async (c) => {
   try {
     const body = await c.req.json()
     const { name, url, type } = body
-
-    if (!name || !url) {
-      return c.json({ success: false, error: '名称和链接不能为空' }, 400)
-    }
-
-    // 默认类型为 subscription
+    
     const finalType = type || 'subscription'
 
     const { success } = await c.env.DB.prepare(
@@ -44,15 +38,14 @@ app.post('/subs', async (c) => {
 
     if (success) {
       return c.json({ success: true, message: 'Added' })
-    } else {
-      return c.json({ success: false, error: 'DB Error' }, 500)
     }
+    return c.json({ success: false, error: 'DB Error' }, 500)
   } catch (e) {
     return c.json({ success: false, error: e.message }, 500)
   }
 })
 
-// 删除
+// 3. 删除
 app.delete('/subs/:id', async (c) => {
   const id = c.req.param('id')
   try {
@@ -63,7 +56,7 @@ app.delete('/subs/:id', async (c) => {
   }
 })
 
-// 更新
+// 4. 更新
 app.put('/subs/:id', async (c) => {
   const id = c.req.param('id')
   const body = await c.req.json()
@@ -88,4 +81,5 @@ app.put('/subs/:id', async (c) => {
   }
 })
 
-export default app
+// 使用 handle 适配器导出，这是 Cloudflare Pages 最稳妥的方式
+export const onRequest = handle(app)

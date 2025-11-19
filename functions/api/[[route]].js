@@ -10,13 +10,12 @@ app.onError((err, c) => {
   return c.json({ error: err.message }, 500)
 })
 
-// 1. 获取所有订阅/节点
+// 获取列表
 app.get('/subs', async (c) => {
   try {
-    // 检查数据库绑定是否存在
-    if (!c.env.DB) {
-      throw new Error('数据库未绑定，请在 Cloudflare Pages 设置中绑定 D1 数据库，变量名为 DB')
-    }
+    // 双重检查数据库绑定
+    if (!c.env.DB) return c.json({ error: 'Database not bound' }, 500)
+
     const { results } = await c.env.DB.prepare(
       "SELECT * FROM subscriptions ORDER BY created_at DESC"
     ).all()
@@ -26,7 +25,7 @@ app.get('/subs', async (c) => {
   }
 })
 
-// 2. 添加订阅或节点
+// 新增
 app.post('/subs', async (c) => {
   try {
     const body = await c.req.json()
@@ -36,37 +35,35 @@ app.post('/subs', async (c) => {
       return c.json({ success: false, error: '名称和链接不能为空' }, 400)
     }
 
-    // 允许的类型：general(通用订阅), v2ray(订阅), clash(订阅), node(单节点)
-    const safeType = type || 'general'
+    // 默认类型为 subscription
+    const finalType = type || 'subscription'
 
     const { success } = await c.env.DB.prepare(
       "INSERT INTO subscriptions (name, url, type) VALUES (?, ?, ?)"
-    ).bind(name, url, safeType).run()
+    ).bind(name, url, finalType).run()
 
     if (success) {
-      return c.json({ success: true, message: '添加成功' })
+      return c.json({ success: true, message: 'Added' })
     } else {
-      return c.json({ success: false, error: '数据库写入失败' }, 500)
+      return c.json({ success: false, error: 'DB Error' }, 500)
     }
   } catch (e) {
     return c.json({ success: false, error: e.message }, 500)
   }
 })
 
-// 3. 删除
+// 删除
 app.delete('/subs/:id', async (c) => {
   const id = c.req.param('id')
   try {
-    await c.env.DB.prepare(
-      "DELETE FROM subscriptions WHERE id = ?"
-    ).bind(id).run()
-    return c.json({ success: true, message: '删除成功' })
+    await c.env.DB.prepare("DELETE FROM subscriptions WHERE id = ?").bind(id).run()
+    return c.json({ success: true })
   } catch (e) {
     return c.json({ success: false, error: e.message }, 500)
   }
 })
 
-// 4. 更新
+// 更新
 app.put('/subs/:id', async (c) => {
   const id = c.req.param('id')
   const body = await c.req.json()
@@ -85,7 +82,7 @@ app.put('/subs/:id', async (c) => {
     params.push(id)
 
     await c.env.DB.prepare(query).bind(...params).run()
-    return c.json({ success: true, message: '更新成功' })
+    return c.json({ success: true })
   } catch (e) {
     return c.json({ success: false, error: e.message }, 500)
   }

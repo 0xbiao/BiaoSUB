@@ -33,10 +33,7 @@
             -webkit-backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
-        /* 长链接自动换行 */
-        .break-anywhere {
-            overflow-wrap: anywhere;
-        }
+        .break-anywhere { overflow-wrap: anywhere; }
     </style>
 </head>
 <body class="text-slate-200">
@@ -58,30 +55,24 @@
 
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
         <div class="stat glass-panel rounded-2xl shadow-lg">
-            <div class="stat-figure text-primary">
-                <i class="fa-solid fa-server text-3xl"></i>
-            </div>
-            <div class="stat-title text-slate-400">资源总数</div>
-            <div class="stat-value text-primary">{{ subs.length }}</div>
-            <div class="stat-desc text-slate-500">订阅与节点合计</div>
+            <div class="stat-figure text-primary"><i class="fa-solid fa-globe text-3xl"></i></div>
+            <div class="stat-title text-slate-400">订阅列表</div>
+            <div class="stat-value text-primary">{{ subCount }}</div>
+            <div class="stat-desc text-slate-500">机场/自建订阅源</div>
         </div>
         
         <div class="stat glass-panel rounded-2xl shadow-lg">
-            <div class="stat-figure text-secondary">
-                <i class="fa-solid fa-check-circle text-3xl"></i>
-            </div>
-            <div class="stat-title text-slate-400">启用中</div>
-            <div class="stat-value text-secondary">{{ activeSubsCount }}</div>
-            <div class="stat-desc text-slate-500">参与聚合的资源</div>
+            <div class="stat-figure text-secondary"><i class="fa-solid fa-microchip text-3xl"></i></div>
+            <div class="stat-title text-slate-400">独立节点</div>
+            <div class="stat-value text-secondary">{{ nodeCount }}</div>
+            <div class="stat-desc text-slate-500">单节点直连</div>
         </div>
 
         <div class="stat glass-panel rounded-2xl shadow-lg">
-            <div class="stat-figure text-emerald-400">
-                <i class="fa-solid fa-link text-3xl"></i>
-            </div>
-            <div class="stat-title text-slate-400">聚合接口</div>
-            <div class="stat-value text-emerald-400 text-lg">准备就绪</div>
-            <div class="stat-desc text-slate-500">等待转换服务配置</div>
+            <div class="stat-figure text-emerald-400"><i class="fa-solid fa-link text-3xl"></i></div>
+            <div class="stat-title text-slate-400">聚合状态</div>
+            <div class="stat-value text-emerald-400 text-lg">等待生成</div>
+            <div class="stat-desc text-slate-500">转换服务配置中</div>
         </div>
     </div>
 
@@ -90,32 +81,35 @@
     </div>
 
     <div v-else class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div v-for="sub in subs" :key="sub.id" 
+        <div v-for="item in items" :key="item.id" 
              class="card bg-slate-800/50 shadow-xl border border-slate-700 hover:border-primary/50 transition-all duration-300 group">
             <div class="card-body p-6">
                 <div class="flex justify-between items-start gap-4">
+                    <div class="mt-1">
+                        <div v-if="item.type === 'subscription'" class="w-10 h-10 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-400">
+                            <i class="fa-solid fa-rss"></i>
+                        </div>
+                        <div v-else class="w-10 h-10 rounded-full bg-pink-500/20 flex items-center justify-center text-pink-400">
+                            <i class="fa-solid fa-network-wired"></i>
+                        </div>
+                    </div>
+                    
                     <div class="flex-1 min-w-0">
-                        <h2 class="card-title text-slate-100 mb-1 text-base">
-                            <span class="truncate">{{ sub.name }}</span>
-                            <div class="badge badge-sm shrink-0" 
-                                 :class="{
-                                    'badge-info': sub.type === 'v2ray',
-                                    'badge-warning': sub.type === 'clash',
-                                    'badge-success': sub.type === 'node',
-                                    'badge-ghost': sub.type === 'general'
-                                 }">
-                                {{ getTypeText(sub.type) }}
-                            </div>
+                        <h2 class="card-title text-slate-100 mb-1 text-base items-center">
+                            <span class="truncate">{{ item.name }}</span>
+                            <span v-if="item.type === 'subscription'" class="badge badge-xs badge-primary badge-outline">SUB</span>
+                            <span v-else class="badge badge-xs badge-secondary badge-outline">NODE</span>
                         </h2>
-                        <p class="text-xs text-slate-500 font-mono mt-1 break-all line-clamp-2" :title="sub.url">
-                            {{ sub.url }}
+                        <p class="text-xs text-slate-500 font-mono mt-1 break-all line-clamp-2" :title="item.url">
+                            {{ item.url }}
                         </p>
                     </div>
+                    
                     <div class="form-control">
                         <label class="cursor-pointer label">
-                            <input type="checkbox" class="toggle toggle-primary toggle-sm" 
-                                   :checked="sub.status === 1" 
-                                   @change="toggleStatus(sub)" />
+                            <input type="checkbox" class="toggle toggle-success toggle-sm" 
+                                   :checked="item.status === 1" 
+                                   @change="toggleStatus(item)" />
                         </label>
                     </div>
                 </div>
@@ -124,16 +118,16 @@
 
                 <div class="card-actions justify-between items-center mt-2">
                     <div class="text-xs text-slate-600">
-                        <i class="fa-regular fa-clock mr-1"></i> {{ new Date(sub.created_at).toLocaleDateString() }}
+                        创建于 {{ new Date(item.created_at).toLocaleDateString() }}
                     </div>
                     <div class="flex gap-3">
-                        <button @click="copyToClipboard(sub.url)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-left" data-tip="复制链接">
+                        <button @click="copyToClipboard(item.url)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white" title="复制">
                             <i class="fa-regular fa-copy"></i>
                         </button>
-                        <button @click="openModal(sub)" class="btn btn-ghost btn-xs text-slate-400 hover:text-blue-400 tooltip tooltip-left" data-tip="编辑">
+                        <button @click="editItem(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-blue-400" title="编辑">
                             <i class="fa-solid fa-pen"></i>
                         </button>
-                        <button @click="deleteSub(sub.id)" class="btn btn-ghost btn-xs text-slate-400 hover:text-red-500 tooltip tooltip-left" data-tip="删除">
+                        <button @click="deleteItem(item.id)" class="btn btn-ghost btn-xs text-slate-400 hover:text-red-500" title="删除">
                             <i class="fa-regular fa-trash-can"></i>
                         </button>
                     </div>
@@ -142,51 +136,71 @@
         </div>
     </div>
 
-    <div v-if="!loading && subs.length === 0" class="text-center py-20 opacity-50">
-        <i class="fa-solid fa-inbox text-6xl mb-4 text-slate-600"></i>
-        <p>暂无资源，请点击右上角添加</p>
-        <p class="text-sm mt-2 text-slate-600">支持 机场订阅URL 或 vmess/ss 等节点链接</p>
+    <div v-if="!loading && items.length === 0" class="text-center py-20 opacity-50">
+        <i class="fa-solid fa-folder-open text-6xl mb-4 text-slate-600"></i>
+        <p>暂无数据，请点击右上角添加</p>
     </div>
 
-    <dialog id="sub_modal" class="modal" :class="{ 'modal-open': showAddModal }">
-        <div class="modal-box bg-slate-800 border border-slate-700">
-            <h3 class="font-bold text-lg text-white mb-6">
-                {{ isEditing ? '编辑资源' : '添加新资源' }}
-            </h3>
+    <dialog id="main_modal" class="modal" :class="{ 'modal-open': showModal }">
+        <div class="modal-box bg-slate-800 border border-slate-700 p-0 overflow-hidden">
             
-            <div class="flex flex-col gap-4">
+            <div class="bg-slate-900/50 p-4 border-b border-slate-700 flex justify-between items-center">
+                <h3 class="font-bold text-lg text-white">
+                    {{ isEditing ? '编辑资源' : '添加资源' }}
+                </h3>
+                <button @click="resetForm" class="btn btn-sm btn-circle btn-ghost">✕</button>
+            </div>
+
+            <div v-if="!isEditing" class="tabs tabs-boxed bg-slate-900 m-4 p-1">
+                <a class="tab flex-1 transition-all" 
+                   :class="{ 'tab-active bg-indigo-600 text-white': activeTab === 'subscription' }"
+                   @click="activeTab = 'subscription'">
+                   <i class="fa-solid fa-rss mr-2"></i> 机场订阅
+                </a>
+                <a class="tab flex-1 transition-all" 
+                   :class="{ 'tab-active bg-pink-600 text-white': activeTab === 'node' }"
+                   @click="activeTab = 'node'">
+                   <i class="fa-solid fa-network-wired mr-2"></i> 自建节点
+                </a>
+            </div>
+
+            <div class="p-6 pt-2 flex flex-col gap-4">
                 <div class="form-control w-full">
-                    <label class="label"><span class="label-text text-slate-300">名称 / 备注</span></label>
-                    <input type="text" v-model="form.name" placeholder="例如: 香港节点A 或 某某机场" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary" />
+                    <label class="label"><span class="label-text text-slate-300">备注名称</span></label>
+                    <input type="text" v-model="form.name" 
+                           :placeholder="activeTab === 'subscription' ? '例如: 某某机场 VIP' : '例如: 香港自建节点'" 
+                           class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary" />
                 </div>
 
-                <div class="form-control w-full">
-                    <label class="label"><span class="label-text text-slate-300">资源类型</span></label>
-                    <select v-model="form.type" class="select select-bordered w-full bg-slate-900 border-slate-600">
-                        <option value="general">通用订阅 (Auto)</option>
-                        <option value="node">单节点链接 (Node)</option>
-                        <option value="v2ray">V2Ray 订阅</option>
-                        <option value="clash">Clash 订阅</option>
-                    </select>
+                <div v-if="activeTab === 'subscription'" class="form-control w-full">
+                    <label class="label"><span class="label-text text-slate-300">订阅链接 (URL)</span></label>
+                    <div class="relative">
+                        <input type="text" v-model="form.url" placeholder="https://domain.com/api/v1/..." 
+                               class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary pr-10" />
+                        <div class="absolute right-3 top-3 text-slate-500">
+                            <i class="fa-solid fa-link"></i>
+                        </div>
+                    </div>
                     <label class="label">
-                        <span class="label-text-alt text-slate-500" v-if="form.type === 'node'">
-                            支持 vmess://, vless://, ss://, trojan:// 等链接
-                        </span>
-                        <span class="label-text-alt text-slate-500" v-else>
-                            以 http/https 开头的订阅地址
-                        </span>
+                        <span class="label-text-alt text-slate-500">支持各类机场订阅链接、Clash 托管链接</span>
                     </label>
                 </div>
-                
-                <div class="form-control w-full">
-                    <label class="label"><span class="label-text text-slate-300">链接地址 (URL)</span></label>
-                    <textarea v-model="form.url" :placeholder="urlPlaceholder" class="textarea textarea-bordered h-24 bg-slate-900 border-slate-600 focus:border-primary break-anywhere"></textarea>
+
+                <div v-if="activeTab === 'node'" class="form-control w-full">
+                    <label class="label"><span class="label-text text-slate-300">节点分享链接</span></label>
+                    <textarea v-model="form.url" placeholder="vmess://...&#10;vless://...&#10;ss://..." 
+                              class="textarea textarea-bordered h-32 bg-slate-900 border-slate-600 focus:border-secondary font-mono text-sm"></textarea>
+                    <label class="label">
+                        <span class="label-text-alt text-slate-500">支持 vmess, vless, ss, trojan, hysteria 等协议链接</span>
+                    </label>
                 </div>
             </div>
 
-            <div class="modal-action mt-8">
+            <div class="modal-action bg-slate-900/30 p-4 m-0 border-t border-slate-700">
                 <button class="btn btn-ghost" @click="resetForm">取消</button>
-                <button class="btn btn-primary" @click="saveSub" :disabled="submitting">
+                <button class="btn text-white" 
+                        :class="activeTab === 'subscription' ? 'btn-primary' : 'btn-secondary'"
+                        @click="saveItem" :disabled="submitting">
                     <span v-if="submitting" class="loading loading-spinner"></span>
                     {{ isEditing ? '更新' : '保存' }}
                 </button>
@@ -210,72 +224,49 @@
 
     createApp({
         setup() {
-            const subs = ref([])
+            const items = ref([])
             const loading = ref(true)
-            const showAddModal = ref(false)
+            const showModal = ref(false)
             const submitting = ref(false)
             const isEditing = ref(false)
             const currentId = ref(null)
+            const activeTab = ref('subscription') // 'subscription' or 'node'
             
-            const form = ref({ name: '', url: '', type: 'general' })
+            const form = ref({ name: '', url: '' })
             const toast = ref({ show: false, message: '', type: 'success' })
 
-            // 计算 URL 占位符
-            const urlPlaceholder = computed(() => {
-                if (form.value.type === 'node') return 'vmess://...\nvless://...\nss://...'
-                return 'https://example.com/api/v1/client/subscribe?token=...'
-            })
-
             // 获取数据
-            const fetchSubs = async () => {
+            const fetchItems = async () => {
                 loading.value = true
                 try {
                     const res = await fetch('/api/subs')
-                    // 检查 HTTP 状态码
-                    if (!res.ok) {
-                        if(res.status === 404 || res.headers.get('content-type')?.includes('text/html')) {
-                            throw new Error('API 未找到 (404)。请检查 Functions 目录结构或 D1 绑定是否生效。')
-                        }
-                        throw new Error(`HTTP 错误 ${res.status}`)
-                    }
-
+                    
+                    // 错误处理：如果不是JSON，通常意味着后端报错了
                     const contentType = res.headers.get('content-type');
-                    if (!contentType || !contentType.includes('application/json')) {
-                        const text = await res.text();
-                        console.error("Received non-JSON response:", text);
-                        throw new Error('服务器返回了非 JSON 数据，可能是报错页面。');
+                    if (!res.ok || !contentType || !contentType.includes('application/json')) {
+                        throw new Error('连接服务器失败，请检查数据库是否创建')
                     }
 
                     const data = await res.json()
                     if (data.success) {
-                        subs.value = data.data
+                        items.value = data.data
                     } else {
-                        throw new Error(data.error || '未知错误')
+                        throw new Error(data.error)
                     }
                 } catch (e) {
                     showToast(e.message, 'error')
-                    console.error(e)
                 } finally {
                     loading.value = false
                 }
             }
 
-            const activeSubsCount = computed(() => subs.value.filter(s => s.status === 1).length)
+            const subCount = computed(() => items.value.filter(i => i.type === 'subscription').length)
+            const nodeCount = computed(() => items.value.filter(i => i.type === 'node').length)
 
-            const getTypeText = (type) => {
-                const map = {
-                    'general': '通用',
-                    'v2ray': 'V2Ray',
-                    'clash': 'Clash',
-                    'node': '节点'
-                }
-                return map[type] || type.toUpperCase()
-            }
-
-            // 保存
-            const saveSub = async () => {
+            // 保存 (新增或编辑)
+            const saveItem = async () => {
                 if (!form.value.name || !form.value.url) {
-                    showToast('请填写完整信息', 'error')
+                    showToast('请填写名称和链接', 'error')
                     return
                 }
                 
@@ -288,16 +279,23 @@
                         method = 'PUT'
                     }
 
+                    // 构造发送的数据
+                    const payload = {
+                        name: form.value.name,
+                        url: form.value.url,
+                        type: activeTab.value // 根据当前标签页决定类型
+                    }
+
                     const res = await fetch(url, {
                         method: method,
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(form.value)
+                        body: JSON.stringify(payload)
                     })
                     const data = await res.json()
                     
                     if (data.success) {
                         showToast(isEditing.value ? '更新成功' : '添加成功')
-                        fetchSubs()
+                        fetchItems()
                         resetForm()
                     } else {
                         throw new Error(data.error)
@@ -310,14 +308,14 @@
             }
 
             // 删除
-            const deleteSub = async (id) => {
-                if (!confirm('确定要删除这个资源吗？')) return
+            const deleteItem = async (id) => {
+                if (!confirm('确定要删除吗？')) return
                 try {
                     const res = await fetch(`/api/subs/${id}`, { method: 'DELETE' })
                     const data = await res.json()
                     if (data.success) {
                         showToast('删除成功')
-                        fetchSubs()
+                        fetchItems()
                     } else {
                         showToast('删除失败', 'error')
                     }
@@ -327,48 +325,52 @@
             }
 
             // 切换状态
-            const toggleStatus = async (sub) => {
-                const newStatus = sub.status === 1 ? 0 : 1
-                sub.status = newStatus // 乐观更新
+            const toggleStatus = async (item) => {
+                const newStatus = item.status === 1 ? 0 : 1
+                item.status = newStatus 
                 try {
-                    await fetch(`/api/subs/${sub.id}`, {
+                    await fetch(`/api/subs/${item.id}`, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ status: newStatus })
                     })
                 } catch (e) {
-                    showToast('状态更新失败', 'error')
-                    sub.status = sub.status === 1 ? 0 : 1
+                    showToast('更新状态失败', 'error')
+                    item.status = item.status === 1 ? 0 : 1
                 }
             }
 
-            // 打开模态框 (编辑或新增)
-            const openModal = (sub = null) => {
-                if (sub) {
-                    // 编辑
-                    form.value = { name: sub.name, url: sub.url, type: sub.type || 'general' }
-                    currentId.value = sub.id
+            // 打开模态框
+            const openModal = (item = null) => {
+                if (item) {
+                    // 编辑模式
+                    form.value = { name: item.name, url: item.url }
+                    activeTab.value = item.type || 'subscription'
+                    currentId.value = item.id
                     isEditing.value = true
                 } else {
-                    // 新增
-                    form.value = { name: '', url: '', type: 'general' }
+                    // 新增模式
+                    form.value = { name: '', url: '' }
+                    activeTab.value = 'subscription' // 默认显示订阅页
                     isEditing.value = false
                     currentId.value = null
                 }
-                showAddModal.value = true
+                showModal.value = true
             }
 
             const resetForm = () => {
-                showAddModal.value = false
+                showModal.value = false
                 setTimeout(() => {
-                    form.value = { name: '', url: '', type: 'general' }
+                    form.value = { name: '', url: '' }
                     isEditing.value = false
                     currentId.value = null
                 }, 200)
             }
 
+            const editItem = (item) => openModal(item)
+
             const copyToClipboard = (text) => {
-                navigator.clipboard.writeText(text).then(() => showToast('已复制到剪贴板'))
+                navigator.clipboard.writeText(text).then(() => showToast('已复制'))
             }
 
             const showToast = (msg, type = 'success') => {
@@ -377,13 +379,14 @@
             }
 
             onMounted(() => {
-                fetchSubs()
+                fetchItems()
             })
 
             return {
-                subs, loading, showAddModal, form, submitting, isEditing,
-                saveSub, deleteSub, toggleStatus, openModal, resetForm,
-                activeSubsCount, toast, copyToClipboard, getTypeText, urlPlaceholder
+                items, loading, showModal, form, submitting, isEditing, activeTab,
+                subCount, nodeCount,
+                saveItem, deleteItem, toggleStatus, openModal, resetForm, editItem,
+                toast, copyToClipboard
             }
         }
     }).mount('#app')

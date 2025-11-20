@@ -12,6 +12,13 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
     <script>
+        window.onerror = function(msg, url, line, col, error) {
+            alert("【面板发生错误】\n" + msg + "\n请截图发给助手排查！");
+            return false;
+        };
+    </script>
+
+    <script>
         tailwind.config = {
             theme: {
                 extend: {
@@ -44,7 +51,15 @@
         
         .border-warning-custom { border-color: #fbbf24 !important; border-width: 1px; }
         .border-error-custom { border-color: #ef4444 !important; border-width: 1px; }
+
+        /* 关键修复：强制未打开的模态框不遮挡点击 */
+        dialog:not([open]) {
+            pointer-events: none !important;
+            visibility: hidden !important;
+            display: none !important;
+        }
         
+        /* 滚动条美化 */
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #1e293b; }
         ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
@@ -55,7 +70,7 @@
 
 <div id="app">
     
-    <div v-if="!isLoggedIn" class="fixed inset-0 z-[999] flex items-center justify-center bg-slate-900/90 backdrop-blur-sm">
+    <div v-if="!isLoggedIn" class="fixed inset-0 z-[9999] flex items-center justify-center bg-slate-900/95 backdrop-blur-sm">
         <div class="card w-96 glass-panel shadow-2xl border border-slate-600">
             <div class="card-body text-center">
                 <div class="mb-4">
@@ -74,7 +89,7 @@
 
     <div class="container mx-auto px-4 py-8 max-w-5xl transition-all duration-500" :class="{ 'blur-content': !isLoggedIn }">
         
-        <div class="navbar glass-panel rounded-2xl mb-8 shadow-xl">
+        <div class="navbar glass-panel rounded-2xl mb-8 shadow-xl relative z-[100]">
             <div class="flex-1">
                 <a class="btn btn-ghost normal-case text-2xl font-bold bg-gradient-to-r from-primary to-secondary text-transparent bg-clip-text">
                     <i class="fa-solid fa-bolt mr-2 text-yellow-400"></i> BiaoSUB
@@ -94,17 +109,19 @@
             </div>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10 relative z-10">
             <div class="stat glass-panel rounded-2xl shadow-lg">
                 <div class="stat-figure text-primary"><i class="fa-solid fa-globe text-3xl"></i></div>
                 <div class="stat-title text-slate-400">订阅源</div>
                 <div class="stat-value text-primary">{{ subCount }}</div>
             </div>
+            
             <div class="stat glass-panel rounded-2xl shadow-lg">
                 <div class="stat-figure text-secondary"><i class="fa-solid fa-microchip text-3xl"></i></div>
                 <div class="stat-title text-slate-400">独立节点</div>
                 <div class="stat-value text-secondary">{{ nodeCount }}</div>
             </div>
+
             <div class="glass-panel rounded-2xl shadow-lg p-6 flex flex-col justify-between relative overflow-hidden group">
                 <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
                     <i class="fa-solid fa-link text-6xl text-emerald-400"></i>
@@ -132,7 +149,7 @@
             </div>
         </div>
 
-        <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
+        <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4 relative z-10">
             <h2 class="text-xl font-bold text-white flex items-center gap-2">
                 <i class="fa-solid fa-list-ul text-primary"></i> 资源列表
             </h2>
@@ -158,7 +175,7 @@
             <span class="loading loading-infinity loading-lg text-primary"></span>
         </div>
         
-        <div v-else id="sortable-list" class="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-20">
+        <div v-else id="sortable-list" class="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-20 relative z-0">
             <div v-for="item in filteredItems" :key="item.id" :data-id="item.id" 
                  class="card bg-slate-800/50 shadow-xl border border-slate-700 hover:border-primary/50 transition-colors duration-300"
                  :class="getAlertClass(item)">
@@ -254,10 +271,10 @@
                         <textarea v-if="activeTab === 'node'" v-model="form.url" placeholder="vmess://... (支持批量)" class="textarea textarea-bordered w-full h-32 bg-slate-900 border-slate-600 font-mono text-sm pr-12"></textarea>
                         <input v-else type="text" v-model="form.url" placeholder="https://..." class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary pr-12" />
                         <button @click="checkUrl" class="absolute right-2 top-2 btn btn-sm btn-square btn-ghost text-accent hover:bg-slate-700" :disabled="checking">
-                            <span v-if="checking" class="loading loading-spinner loading-xs"></span><i v-else class="fa-solid fa-bolt"></i>
+                            <span v-if="checking" class="loading loading-spinner loading-xs"></span>
+                            <i v-else class="fa-solid fa-bolt"></i>
                         </button>
                     </div>
-                    
                     <div v-if="checkResult" class="alert shadow-lg border border-slate-600 p-3" :class="checkResult.success ? 'bg-slate-900/50' : 'bg-red-900/20'">
                         <div class="w-full text-xs">
                             <div class="flex items-center gap-2 font-bold mb-1">
@@ -317,7 +334,6 @@
                         <label class="label text-slate-300">User-Agent</label>
                         <input type="text" v-model="settingsForm.user_agent" class="input input-bordered bg-slate-900" />
                     </div>
-                    
                     <div class="divider text-xs">数据备份</div>
                     <div class="grid grid-cols-2 gap-4">
                         <button @click="exportData" class="btn btn-outline btn-info btn-sm">
@@ -396,12 +412,11 @@
 
         <dialog class="modal" :class="{ 'modal-open': qrModal.show }">
             <div class="modal-box bg-slate-800 border border-slate-700 text-center">
-                <h3 class="font-bold text-lg text-white mb-2">{{ qrModal.title }}</h3>
-                <p class="text-xs text-slate-500 mb-6 break-all line-clamp-1">{{ qrModal.url }}</p>
-                <div class="bg-white p-4 rounded-xl inline-block mx-auto">
+                <h3 class="font-bold text-lg text-white mb-4">{{ qrModal.title }}</h3>
+                <div class="bg-white p-4 rounded-xl inline-block">
                     <canvas id="qr-canvas"></canvas>
                 </div>
-                <div class="modal-action flex justify-center mt-6">
+                <div class="modal-action justify-center">
                     <button class="btn btn-primary w-full max-w-xs" @click="qrModal.show=false">关闭</button>
                 </div>
             </div>
@@ -424,7 +439,6 @@
 
     createApp({
         setup() {
-            // --- State ---
             const isLoggedIn = ref(false)
             const loginPassword = ref('')
             const loginLoading = ref(false)
@@ -473,7 +487,7 @@
             
             let sortableInstance = null
 
-            // --- Helpers ---
+            // Helpers
             const authFetch = async (url, options = {}) => {
                 const token = localStorage.getItem('biaosub_token')
                 const headers = { 
@@ -494,7 +508,7 @@
                 setTimeout(() => toast.value.show = false, 3000)
             }
 
-            // --- Login ---
+            // Login Logic
             const handleLogin = async () => {
                 if (!loginPassword.value) return
                 loginLoading.value = true
@@ -535,7 +549,6 @@
                 }
             }
 
-            // --- Data ---
             const initData = () => {
                 fetchItems()
                 fetchSettings()
@@ -546,15 +559,12 @@
                 try {
                     const res = await authFetch(`${API_BASE}/subs`)
                     const data = await res.json()
-                    if (data.success && Array.isArray(data.data)) {
+                    if (data.success) {
                         items.value = data.data
                         nextTick(() => initSortable())
-                    } else {
-                        // 如果后端因为字段缺失报错，这里可能会失败
-                        items.value = []
                     }
                 } catch (e) {
-                    items.value = []
+                    console.error(e)
                 } finally {
                     loading.value = false
                 }
@@ -566,20 +576,15 @@
                     const data = await res.json()
                     if (data.success && data.data) {
                         settings.value = data.data
-                        // 确保 filter_config 对象存在
                         let fc = data.data.filter_config || { include:'', exclude:'', rename:'' }
                         if (typeof fc === 'string') {
                             try { fc = JSON.parse(fc) } catch(e) { fc = { include:'', exclude:'', rename:'' } }
                         }
-                        settingsForm.value = { 
-                            ...data.data, 
-                            filter_config: fc
-                        }
+                        settingsForm.value = { ...data.data, filter_config: fc }
                     }
                 } catch (e) {}
             }
 
-            // --- Actions ---
             const saveSettings = async () => {
                 submitting.value = true
                 try {
@@ -595,6 +600,29 @@
                 } finally {
                     submitting.value = false
                 }
+            }
+
+            const openModal = (item) => {
+                checkResult.value = null
+                activeModalTab.value = 'basic'
+                if (item) {
+                    form.value = { 
+                        ...item, 
+                        params: item.params || { include:'', exclude:'', rename:'' } 
+                    }
+                    currentId.value = item.id
+                    activeTab.value = item.type
+                    isEditing.value = true
+                } else {
+                    form.value = { 
+                        name: '', 
+                        url: '', 
+                        params: { include:'', exclude:'', rename:'' } 
+                    }
+                    activeTab.value = 'subscription'
+                    isEditing.value = false
+                }
+                showModal.value = true
             }
 
             const saveItem = async () => {
@@ -715,6 +743,12 @@
                 }
             }
 
+            const copyAllNodes = () => {
+                const links = previewModal.value.nodes.map(n => n.link).filter(l => l).join('\n')
+                if (!links) return showToast('无有效链接', 'error')
+                copyToClip(links)
+            }
+
             const refreshItem = async (item) => {
                 item.refreshing = true
                 try {
@@ -744,38 +778,17 @@
                 }
             }
 
-            const deleteItem = async (id) => {
-                if(confirm('确认删除?')) {
-                    await authFetch(`${API_BASE}/subs/${id}`, { method: 'DELETE' })
-                    fetchItems()
-                }
-            }
-
-            const toggleStatus = async (item) => {
-                item.status = item.status === 1 ? 0 : 1
-                await authFetch(`${API_BASE}/subs/${item.id}`, {
-                    method: 'PUT',
-                    body: JSON.stringify({status: item.status})
-                })
-            }
-            
-            const copyAllNodes = () => {
-                const links = previewModal.value.nodes.map(n => n.link).filter(l => l).join('\n')
-                if (!links) return showToast('无有效链接', 'error')
-                copyToClip(links)
-            }
-
-            // --- Drag & Drop ---
             const canSort = computed(() => searchText.value === '' && filterType.value === 'all')
+            
             const initSortable = () => {
                 const el = document.getElementById('sortable-list')
                 if (!el) return
                 if (sortableInstance) sortableInstance.destroy()
-                
                 sortableInstance = new Sortable(el, {
                     handle: '.drag-handle',
                     animation: 150,
                     ghostClass: 'sortable-ghost',
+                    dragClass: 'sortable-drag',
                     disabled: !canSort.value,
                     onEnd: async (evt) => {
                         const item = items.value.splice(evt.oldIndex, 1)[0]
@@ -790,28 +803,11 @@
                     }
                 })
             }
+            
             watch([searchText, filterType], () => {
                 if(sortableInstance) sortableInstance.option("disabled", !canSort.value)
             })
 
-            // --- UI Helpers ---
-            const openModal = (item) => {
-                checkResult.value = null
-                activeModalTab.value = 'basic'
-                if(item) {
-                    form.value = { ...item, params: item.params || { include:'', exclude:'', rename:'' } }
-                    currentId.value = item.id; activeTab.value = item.type; isEditing.value = true
-                } else {
-                    form.value = { name: '', url: '', params: { include:'', exclude:'', rename:'' } }
-                    activeTab.value = 'subscription'; isEditing.value = false
-                }
-                showModal.value = true
-            }
-            const openSettings = () => {
-                settingsForm.value = JSON.parse(JSON.stringify(settings.value))
-                showSettingsModal.value = true
-            }
-            const editItem = (i) => openModal(i)
             const copyToClip = (text) => navigator.clipboard.writeText(text).then(() => showToast('已复制'))
             
             const showQr = async (item) => {
@@ -823,7 +819,28 @@
                 }, 100)
             }
 
-            // Backup
+            const deleteItem = async (id) => {
+                if(confirm('确认删除?')) {
+                    await authFetch(`${API_BASE}/subs/${id}`, { method: 'DELETE' })
+                    fetchItems()
+                }
+            }
+
+            const toggleStatus = async (item) => {
+                item.status = item.status === 1 ? 0 : 1
+                await authFetch(`${API_BASE}/subs/${item.id}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({status: item.status})
+                })
+            }
+
+            const openSettings = () => {
+                settingsForm.value = JSON.parse(JSON.stringify(settings.value))
+                showSettingsModal.value = true
+            }
+
+            const editItem = (i) => openModal(i)
+            
             const exportData = () => {
                 const d = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(items.value))
                 const a = document.createElement('a')
@@ -834,49 +851,74 @@
                 a.remove()
                 showToast('已导出')
             }
+
             const importData = async (ev) => {
-                const f = ev.target.files[0]; if (!f) return
+                const f = ev.target.files[0]
+                if (!f) return
                 const r = new FileReader()
                 r.onload = async (e) => {
                     try {
                         const i = JSON.parse(e.target.result)
                         if (!Array.isArray(i)) throw new Error('格式错误')
                         await authFetch(`${API_BASE}/backup/import`, {
-                            method: 'POST', body: JSON.stringify({ items: i })
+                            method: 'POST',
+                            body: JSON.stringify({ items: i })
                         })
                         showToast('恢复成功')
                         fetchItems()
                         showSettingsModal.value = false
-                    } catch (err) { showToast('导入失败', 'error') }
+                    } catch (err) {
+                        showToast('导入失败', 'error')
+                    }
                 }
                 r.readAsText(f)
             }
 
-            // Styles
-            const getFlagEmoji = (c) => c ? String.fromCodePoint(...c.toUpperCase().split('').map(x=>127397+x.charCodeAt())) : ''
-            const isExpired = (ts) => ts && (ts.toString().length===10?ts*1000:ts) < Date.now()
+            const getFlagEmoji = (code) => {
+                if(!code) return ''
+                return String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt()))
+            }
+
+            const isExpired = (ts) => {
+                if(!ts) return false
+                return (ts.toString().length === 10 ? ts * 1000 : ts) < Date.now()
+            }
+
             const getAlertClass = (i) => {
                 if(!i.info?.stats) return ''
                 const p = i.info.stats.percent
-                if(p >= 90 || isExpired(i.info.stats.raw_expire)) return 'border-error-custom'
-                if(p >= 70) return 'border-warning-custom'
+                const isExp = isExpired(i.info.stats.raw_expire)
+                if (p >= 90 || isExp) return 'border-error-custom'
+                if (p >= 70) return 'border-warning-custom'
                 return ''
             }
-            const getProgressClass = (p) => p>=90?'progress-error':p>=70?'progress-warning':'progress-primary'
-            const getTextColorClass = (p) => p>=90?'text-red-400 font-bold':p>=70?'text-yellow-400':'text-slate-400'
+
+            const getProgressClass = (p) => p >= 90 ? 'progress-error' : (p >= 70 ? 'progress-warning' : 'progress-primary')
+            const getTextColorClass = (p) => p >= 90 ? 'text-red-400 font-bold' : (p >= 70 ? 'text-yellow-400' : 'text-slate-400')
 
             const subCount = computed(() => items.value.filter(i => i.type === 'subscription').length)
             const nodeCount = computed(() => items.value.filter(i => i.type === 'node').length)
-            const filteredItems = computed(() => items.value.filter(item => {
-                if (filterType.value !== 'all' && item.type !== filterType.value) return false
-                const term = searchText.value.toLowerCase()
-                return item.name.toLowerCase().includes(term) || item.url.toLowerCase().includes(term)
-            }))
             
+            const filteredItems = computed(() => {
+                return items.value.filter(item => {
+                    if (filterType.value !== 'all' && item.type !== filterType.value) return false
+                    const term = searchText.value.toLowerCase()
+                    return item.name.toLowerCase().includes(term) || item.url.toLowerCase().includes(term)
+                })
+            })
+
             const copyLink = (type) => {
                 const rawSubUrl = `${domain}/subscribe`
                 let backend = settings.value.sub_converter_url || "https://api.acl4.ssr/sub"
-                let finalUrl = type === 'v2ray' ? rawSubUrl : `${backend}?target=clash&url=${encodeURIComponent(rawSubUrl)}&insert=false` + (settings.value.sub_converter_token ? `&token=${settings.value.sub_converter_token}` : '')
+                let finalUrl = ""
+                if (type === 'v2ray') {
+                    finalUrl = rawSubUrl
+                } else if (type === 'clash') {
+                    finalUrl = `${backend}?target=clash&url=${encodeURIComponent(rawSubUrl)}&insert=false`
+                    if (settings.value.sub_converter_token) {
+                        finalUrl += `&token=${settings.value.sub_converter_token}`
+                    }
+                }
                 navigator.clipboard.writeText(finalUrl).then(() => showToast(`已复制 ${type} 链接`))
             }
 

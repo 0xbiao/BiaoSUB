@@ -6,19 +6,13 @@
     <title>BiaoSUB 管理面板</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet" type="text/css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script>
         tailwind.config = {
             theme: {
-                extend: {
-                    colors: {
-                        primary: '#6366f1',
-                        secondary: '#ec4899',
-                        accent: '#1fb2a6',
-                    }
-                }
+                extend: { colors: { primary: '#6366f1', secondary: '#ec4899', accent: '#1fb2a6' } }
             }
         }
     </script>
@@ -40,7 +34,6 @@
 <body class="text-slate-200">
 
 <div id="app">
-    
     <div v-if="!isLoggedIn" class="fixed inset-0 z-[999] flex items-center justify-center bg-slate-900/90 backdrop-blur-sm">
         <div class="card w-96 glass-panel shadow-2xl border border-slate-600">
             <div class="card-body text-center">
@@ -110,9 +103,7 @@
         </div>
 
         <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
-            <h2 class="text-xl font-bold text-white flex items-center gap-2">
-                <i class="fa-solid fa-list-ul text-primary"></i> 资源列表
-            </h2>
+            <h2 class="text-xl font-bold text-white flex items-center gap-2"><i class="fa-solid fa-list-ul text-primary"></i> 资源列表</h2>
             <div class="join w-full md:w-auto">
                 <div class="relative w-full md:w-64">
                     <input type="text" v-model="searchText" placeholder="搜索名称或链接..." class="input input-bordered bg-slate-800 border-slate-600 focus:border-primary w-full join-item pl-10" />
@@ -126,15 +117,7 @@
             </div>
         </div>
 
-        <div v-if="loading" class="flex justify-center py-20">
-            <span class="loading loading-infinity loading-lg text-primary"></span>
-        </div>
-        
-        <div v-else-if="filteredItems.length === 0 && items.length > 0" class="text-center py-20 opacity-50">
-            <i class="fa-solid fa-filter-circle-xmark text-6xl mb-4 text-slate-600"></i>
-            <p>没有找到匹配的资源</p>
-        </div>
-
+        <div v-if="loading" class="flex justify-center py-20"><span class="loading loading-infinity loading-lg text-primary"></span></div>
         <div v-else class="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <div v-for="item in filteredItems" :key="item.id" class="card bg-slate-800/50 shadow-xl border border-slate-700 hover:border-primary/50 transition-all duration-300">
                 <div class="card-body p-6">
@@ -154,12 +137,8 @@
                     </div>
                     <div class="divider my-2 bg-slate-700/50 h-[1px]"></div>
                     <div class="card-actions justify-end gap-2">
-                        <button @click="showQr(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="二维码">
-                            <i class="fa-solid fa-qrcode"></i>
-                        </button>
-                        <button @click="copyToClip(item.url)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="复制链接">
-                            <i class="fa-regular fa-copy"></i>
-                        </button>
+                        <button @click="showQr(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="二维码"><i class="fa-solid fa-qrcode"></i></button>
+                        <button @click="copyToClip(item.url)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="复制"><i class="fa-regular fa-copy"></i></button>
                         <button @click="editItem(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-blue-400"><i class="fa-solid fa-pen"></i></button>
                         <button @click="deleteItem(item.id)" class="btn btn-ghost btn-xs text-slate-400 hover:text-red-500"><i class="fa-regular fa-trash-can"></i></button>
                     </div>
@@ -171,14 +150,42 @@
             <div class="modal-box bg-slate-800 border border-slate-700">
                 <h3 class="font-bold text-lg text-white mb-4">{{ isEditing ? '编辑资源' : '添加资源' }}</h3>
                 <div v-if="!isEditing" class="tabs tabs-boxed bg-slate-900 mb-4">
-                    <a class="tab flex-1" :class="{ 'tab-active bg-indigo-600 text-white': activeTab === 'subscription' }" @click="activeTab = 'subscription'">订阅</a>
-                    <a class="tab flex-1" :class="{ 'tab-active bg-pink-600 text-white': activeTab === 'node' }" @click="activeTab = 'node'">节点</a>
+                    <a class="tab flex-1" :class="{ 'tab-active bg-indigo-600 text-white': activeTab === 'subscription' }" @click="activeTab = 'subscription'; checkResult=null">订阅</a>
+                    <a class="tab flex-1" :class="{ 'tab-active bg-pink-600 text-white': activeTab === 'node' }" @click="activeTab = 'node'; checkResult=null">节点</a>
                 </div>
+                
                 <div class="flex flex-col gap-4">
                     <input type="text" v-model="form.name" placeholder="备注名称" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary" />
-                    <textarea v-if="activeTab === 'node'" v-model="form.url" placeholder="vmess://..." class="textarea textarea-bordered h-24 bg-slate-900 border-slate-600 font-mono text-sm"></textarea>
-                    <input v-else type="text" v-model="form.url" placeholder="https://..." class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary" />
+                    
+                    <div class="relative">
+                        <textarea v-if="activeTab === 'node'" v-model="form.url" placeholder="vmess://..." class="textarea textarea-bordered w-full h-24 bg-slate-900 border-slate-600 font-mono text-sm pr-12"></textarea>
+                        <input v-else type="text" v-model="form.url" placeholder="https://..." class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary pr-12" />
+                        
+                        <button @click="checkUrl" class="absolute right-2 top-2 btn btn-sm btn-square btn-ghost text-accent hover:bg-slate-700 tooltip tooltip-left" data-tip="连接测试 / 获取信息" :disabled="checking">
+                            <span v-if="checking" class="loading loading-spinner loading-xs"></span>
+                            <i v-else class="fa-solid fa-bolt"></i>
+                        </button>
+                    </div>
+
+                    <div v-if="checkResult" class="alert shadow-lg border border-slate-600 p-3" :class="checkResult.success ? 'bg-slate-900/50' : 'bg-red-900/20'">
+                        <div class="w-full">
+                            <div class="flex items-center gap-2 mb-1">
+                                <i class="fa-solid" :class="checkResult.success ? 'fa-circle-check text-success' : 'fa-circle-xmark text-error'"></i>
+                                <span class="font-bold text-sm">{{ checkResult.message }}</span>
+                            </div>
+                            <div v-if="checkResult.stats" class="grid grid-cols-2 gap-2 text-xs text-slate-400 mt-2 bg-slate-800 p-2 rounded">
+                                <div><i class="fa-solid fa-download mr-1"></i> 已用: <span class="text-white">{{ checkResult.stats.used }}</span></div>
+                                <div><i class="fa-solid fa-box-archive mr-1"></i> 总计: <span class="text-white">{{ checkResult.stats.total }}</span></div>
+                                <div><i class="fa-solid fa-clock mr-1"></i> 过期: <span class="text-white">{{ checkResult.stats.expire }}</span></div>
+                                <div><i class="fa-solid fa-list-ol mr-1"></i> 节点: <span class="text-white">{{ checkResult.nodeCount }} 个</span></div>
+                            </div>
+                            <div v-else-if="checkResult.success && activeTab==='node'" class="text-xs text-slate-400 ml-6">
+                                格式校验通过。由于边缘计算限制，无法进行 ICMP Ping。
+                            </div>
+                        </div>
+                    </div>
                 </div>
+
                 <div class="modal-action">
                     <button class="btn btn-ghost" @click="showModal=false">取消</button>
                     <button class="btn btn-primary" @click="saveItem" :disabled="submitting">保存</button>
@@ -214,19 +221,14 @@
             <div class="modal-box bg-slate-800 border border-slate-700 text-center">
                 <h3 class="font-bold text-lg text-white mb-2">{{ qrModal.title }}</h3>
                 <p class="text-xs text-slate-500 mb-6 break-all line-clamp-1">{{ qrModal.url }}</p>
-                
                 <div class="bg-white p-4 rounded-xl inline-block mx-auto">
-                    <img v-if="qrModal.imgData" :src="qrModal.imgData" class="w-64 h-64" />
-                    <span v-else class="loading loading-spinner text-primary"></span>
+                    <canvas id="qr-canvas"></canvas>
                 </div>
-                
                 <div class="modal-action flex justify-center mt-6">
                     <button class="btn btn-primary w-full max-w-xs" @click="qrModal.show=false">关闭</button>
                 </div>
             </div>
-            <form method="dialog" class="modal-backdrop">
-                <button @click="qrModal.show=false">close</button>
-            </form>
+            <form method="dialog" class="modal-backdrop"><button @click="qrModal.show=false">close</button></form>
         </dialog>
 
         <div v-if="toast.show" class="toast toast-bottom toast-end z-50">
@@ -236,42 +238,23 @@
 </div>
 
 <script>
-    const { createApp, ref, onMounted, computed } = Vue
+    const { createApp, ref, onMounted, computed, nextTick } = Vue
     const API_BASE = '/api'
 
     createApp({
         setup() {
-            // --- 状态 ---
-            const isLoggedIn = ref(false)
-            const loginPassword = ref('')
-            const loginLoading = ref(false)
-            const loginError = ref('')
-            
-            const items = ref([])
-            const loading = ref(false)
-            const submitting = ref(false)
-            
-            // 搜索与过滤
-            const searchText = ref('')
-            const filterType = ref('all')
-
-            // UI
-            const showModal = ref(false)
-            const isEditing = ref(false)
-            const currentId = ref(null)
-            const activeTab = ref('subscription')
-            const form = ref({ name: '', url: '' })
-            
-            const showSettingsModal = ref(false)
-            const settings = ref({})
-            const settingsForm = ref({})
-            const toast = ref({ show: false, message: '', type: 'success' })
+            const isLoggedIn = ref(false); const loginPassword = ref(''); const loginLoading = ref(false); const loginError = ref('')
+            const items = ref([]); const loading = ref(false); const submitting = ref(false)
+            const searchText = ref(''); const filterType = ref('all')
+            const showModal = ref(false); const isEditing = ref(false); const currentId = ref(null); const activeTab = ref('subscription'); const form = ref({ name: '', url: '' })
+            const showSettingsModal = ref(false); const settings = ref({}); const settingsForm = ref({}); const toast = ref({ show: false, message: '', type: 'success' })
             const domain = window.location.origin
+            const qrModal = ref({ show: false, title: '', url: '' })
+            
+            // 检测相关
+            const checking = ref(false)
+            const checkResult = ref(null)
 
-            // 二维码弹窗状态
-            const qrModal = ref({ show: false, title: '', url: '', imgData: null })
-
-            // --- 鉴权 ---
             const authFetch = async (url, options = {}) => {
                 const token = localStorage.getItem('biaosub_token')
                 const headers = { 'Content-Type': 'application/json', 'Authorization': token || '' }
@@ -287,65 +270,73 @@
                 try {
                     const res = await fetch(`${API_BASE}/login`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({password: loginPassword.value}) })
                     const data = await res.json()
-                    if (data.success) {
-                        localStorage.setItem('biaosub_token', loginPassword.value)
-                        isLoggedIn.value = true; loginPassword.value = ''; showToast('欢迎回来'); initData()
-                    } else { loginError.value = data.error }
+                    if (data.success) { localStorage.setItem('biaosub_token', loginPassword.value); isLoggedIn.value = true; loginPassword.value = ''; showToast('欢迎回来'); initData() } 
+                    else { loginError.value = data.error }
                 } catch (e) { loginError.value = '网络连接失败' } finally { loginLoading.value = false }
             }
 
             const logout = () => { localStorage.removeItem('biaosub_token'); isLoggedIn.value = false; items.value = [] }
             const checkLoginStatus = () => { if (localStorage.getItem('biaosub_token')) { isLoggedIn.value = true; initData() } }
-
-            // --- 业务 ---
             const initData = () => { fetchItems(); fetchSettings() }
             const fetchItems = async () => {
                 loading.value = true
-                try {
-                    const res = await authFetch(`${API_BASE}/subs`)
-                    const data = await res.json()
-                    if (data.success) items.value = data.data
-                } catch (e) { console.error(e) } finally { loading.value = false }
+                try { const res = await authFetch(`${API_BASE}/subs`); const data = await res.json(); if (data.success) items.value = data.data } 
+                catch (e) { console.error(e) } finally { loading.value = false }
             }
-            const fetchSettings = async () => {
-                try {
-                    const res = await authFetch(`${API_BASE}/settings`)
-                    const data = await res.json()
-                    if (data.success && data.data) { settings.value = data.data; settingsForm.value = { ...data.data } }
-                } catch (e) {}
-            }
+            const fetchSettings = async () => { try { const res = await authFetch(`${API_BASE}/settings`); const data = await res.json(); if (data.success && data.data) { settings.value = data.data; settingsForm.value = { ...data.data } } } catch (e) {} }
+            
+            const filteredItems = computed(() => items.value.filter(item => {
+                if (filterType.value !== 'all' && item.type !== filterType.value) return false
+                const term = searchText.value.toLowerCase()
+                return item.name.toLowerCase().includes(term) || item.url.toLowerCase().includes(term)
+            }))
 
-            // 过滤逻辑
-            const filteredItems = computed(() => {
-                return items.value.filter(item => {
-                    // 类型过滤
-                    if (filterType.value !== 'all' && item.type !== filterType.value) return false
-                    // 搜索关键词过滤 (不区分大小写)
-                    const term = searchText.value.toLowerCase()
-                    return item.name.toLowerCase().includes(term) || item.url.toLowerCase().includes(term)
-                })
-            })
-
-            // 二维码逻辑
+            // 二维码逻辑 (使用 QRious)
             const showQr = async (item) => {
-                qrModal.value = { show: true, title: item.name, url: item.url, imgData: null }
-                // 使用 QRCode 库生成
+                qrModal.value = { show: true, title: item.name, url: item.url }
+                await nextTick() // 等待 DOM 更新，确保 canvas 存在
+                setTimeout(() => {
+                    const canvas = document.getElementById('qr-canvas')
+                    if(canvas) {
+                        new QRious({
+                            element: canvas,
+                            value: item.url,
+                            size: 200,
+                            level: 'H'
+                        })
+                    }
+                }, 100)
+            }
+
+            // 核心：检测链接
+            const checkUrl = async () => {
+                if (!form.value.url) return showToast('请输入链接', 'error')
+                checking.value = true
+                checkResult.value = null
                 try {
-                    const url = await QRCode.toDataURL(item.url, { width: 300, margin: 2 })
-                    qrModal.value.imgData = url
+                    const res = await authFetch(`${API_BASE}/check`, {
+                        method: 'POST',
+                        body: JSON.stringify({ url: form.value.url, type: activeTab.value })
+                    })
+                    const data = await res.json()
+                    if (data.success) {
+                        checkResult.value = { success: true, message: '连接成功', ...data.data }
+                        // 自动填充名称 (如果还没填的话，且后端返回了信息)
+                        // 这里后端目前没返回名称，但如果以后返回了可以在这加
+                    } else {
+                        checkResult.value = { success: false, message: data.error || '连接失败' }
+                    }
                 } catch (e) {
-                    showToast('生成二维码失败', 'error')
+                    checkResult.value = { success: false, message: '网络请求错误' }
+                } finally {
+                    checking.value = false
                 }
             }
 
             const saveSettings = async () => {
                 submitting.value = true
-                try {
-                    await authFetch(`${API_BASE}/settings`, { method: 'POST', body: JSON.stringify(settingsForm.value) })
-                    showToast('设置已保存'); settings.value = { ...settingsForm.value }; showSettingsModal.value = false
-                } catch (e) { showToast('保存失败', 'error') } finally { submitting.value = false }
+                try { await authFetch(`${API_BASE}/settings`, { method: 'POST', body: JSON.stringify(settingsForm.value) }); showToast('设置已保存'); settings.value = { ...settingsForm.value }; showSettingsModal.value = false } catch (e) { showToast('保存失败', 'error') } finally { submitting.value = false }
             }
-
             const saveItem = async () => {
                 if (!form.value.name || !form.value.url) return showToast('请填写完整', 'error')
                 submitting.value = true
@@ -356,21 +347,20 @@
                     if ((await (await authFetch(url, { method, body: JSON.stringify(payload) })).json()).success) { showToast('保存成功'); fetchItems(); showModal.value=false; }
                 } catch (e) { showToast('操作失败', 'error') } finally { submitting.value = false }
             }
-
             const deleteItem = async (id) => { if(confirm('确认删除?')) { await authFetch(`${API_BASE}/subs/${id}`, { method: 'DELETE' }); fetchItems(); } }
-            const toggleStatus = async (item) => {
-                item.status = item.status === 1 ? 0 : 1
-                await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({status: item.status}) })
-            }
-
+            const toggleStatus = async (item) => { item.status = item.status === 1 ? 0 : 1; await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({status: item.status}) }) }
             const copyToClip = (text) => navigator.clipboard.writeText(text).then(() => showToast('已复制'))
-            const openModal = (item) => { if(item) { form.value={...item}; currentId.value=item.id; activeTab.value=item.type; isEditing.value=true } else { form.value={name:'',url:''}; activeTab.value='subscription'; isEditing.value=false } showModal.value=true }
+            const openModal = (item) => { 
+                checkResult.value = null; // 重置检测结果
+                if(item) { form.value={...item}; currentId.value=item.id; activeTab.value=item.type; isEditing.value=true } 
+                else { form.value={name:'',url:''}; activeTab.value='subscription'; isEditing.value=false } 
+                showModal.value=true 
+            }
             const openSettings = () => { settingsForm.value = { ...settings.value }; showSettingsModal.value = true }
             const showToast = (m, t='success') => { toast.value={show:true, message:m, type:t}; setTimeout(()=>toast.value.show=false, 3000) }
             const editItem = (i) => openModal(i)
             const subCount = computed(() => items.value.filter(i => i.type === 'subscription').length)
             const nodeCount = computed(() => items.value.filter(i => i.type === 'node').length)
-
             const copyLink = (type) => {
                 const rawSubUrl = `${domain}/subscribe`
                 let backend = settings.value.sub_converter_url || "https://api.acl4.ssr/sub"
@@ -382,15 +372,13 @@
                 }
                 navigator.clipboard.writeText(finalUrl).then(() => showToast(`已复制 ${type} 链接`))
             }
-
             onMounted(checkLoginStatus)
-
             return { 
                 isLoggedIn, loginPassword, loginLoading, loginError, handleLogin, logout,
                 items, filteredItems, loading, submitting, subCount, nodeCount, searchText, filterType,
                 showModal, isEditing, activeTab, form, showSettingsModal, settingsForm, settings, qrModal,
                 saveItem, deleteItem, toggleStatus, openModal, editItem, openSettings, saveSettings, showQr,
-                toast, copyLink, copyToClip
+                toast, copyLink, copyToClip, checkUrl, checking, checkResult
             }
         }
     }).mount('#app')

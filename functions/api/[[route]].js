@@ -6,13 +6,19 @@ const app = new Hono().basePath('/api')
 
 app.use('/*', cors())
 
-// --- 鉴权 ---
+// --- 1. 鉴权中间件 ---
 app.use('/*', async (c, next) => {
-  if (c.req.path.endsWith('/login')) return await next()
+  if (c.req.path.endsWith('/login')) {
+    return await next()
+  }
   const authHeader = c.req.header('Authorization')
   const correctPassword = c.env.ADMIN_PASSWORD
-  if (!correctPassword) return c.json({ success: false, error: '未设置环境变量 ADMIN_PASSWORD' }, 500)
-  if (authHeader !== correctPassword) return c.json({ success: false, error: '密码错误' }, 401)
+  if (!correctPassword) {
+    return c.json({ success: false, error: '未设置环境变量 ADMIN_PASSWORD' }, 500)
+  }
+  if (authHeader !== correctPassword) {
+    return c.json({ success: false, error: '密码错误或未登录' }, 401)
+  }
   await next()
 })
 
@@ -21,7 +27,7 @@ app.onError((err, c) => {
   return c.json({ error: err.message }, 500)
 })
 
-// --- 工具函数 ---
+// --- 2. 工具函数 ---
 const formatBytes = (bytes) => {
   if (!bytes || isNaN(bytes)) return '0 B'
   const k = 1024
@@ -43,21 +49,19 @@ const getGeoInfo = async (host) => {
     if (data.status === 'success') {
       return { country: data.country, code: data.countryCode, ip: data.query }
     }
-  } catch (e) {}
+  } catch (e) {
+    console.error('Geo fetch error', e)
+  }
   return null
 }
 
-// --- 核心：清洗引擎 ---
+// --- 3. 核心：清洗引擎 ---
 const cleanNodes = (nodes, globalParams, localParams) => {
-  // 合并规则：优先使用本地规则，如果没有则使用全局
-  // 注意：这里采用的是“合并生效”策略，还是“本地覆盖全局”？
-  // 为了灵活，我们采用：先应用全局，再应用本地。
-  
   const applyRules = (nodeList, params) => {
     if (!params) return nodeList
     let list = [...nodeList]
 
-    // 1. 排除 (Exclude)
+    // 排除 (Exclude)
     if (params.exclude) {
       const excludes = params.exclude.split('\n').filter(k => k.trim())
       if (excludes.length > 0) {
@@ -65,7 +69,7 @@ const cleanNodes = (nodes, globalParams, localParams) => {
       }
     }
 
-    // 2. 包含 (Include) - 如果设置了，只保留匹配的
+    // 包含 (Include)
     if (params.include) {
       const includes = params.include.split('\n').filter(k => k.trim())
       if (includes.length > 0) {
@@ -73,16 +77,14 @@ const cleanNodes = (nodes, globalParams, localParams) => {
       }
     }
 
-    // 3. 重命名 (Rename)
+    // 重命名 (Rename)
     if (params.rename) {
       const renames = params.rename.split('\n').filter(k => k.trim())
       renames.forEach(rule => {
-        // 格式: 旧文本@新文本 (用@分隔)
         const parts = rule.split('@')
         if (parts.length === 2) {
           const [oldStr, newStr] = parts
           list.forEach(node => {
-            // 支持简单的字符串替换
             node.name = node.name.split(oldStr).join(newStr)
           })
         }
@@ -98,14 +100,16 @@ const cleanNodes = (nodes, globalParams, localParams) => {
   return result
 }
 
-// --- 核心：节点解析 ---
+// --- 4. 核心：节点解析 ---
 const parseNodes = (text) => {
   const nodes = []
   let decodedText = text
   try {
     const cleanText = text.replace(/\s/g, '')
     decodedText = atob(cleanText.replace(/-/g, '+').replace(/_/g, '/'))
-  } catch (e) {}
+  } catch (e) {
+    // 解码失败通常意味着是明文或YAML，保持原样
+  }
 
   const lines = decodedText.split('\n')
   const regex = /^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//i
@@ -131,15 +135,18 @@ const parseNodes = (text) => {
       let name = `${protocol}节点`
       const hashIndex = trimLine.lastIndexOf('#')
       if (hashIndex !== -1) {
-        try { name = decodeURIComponent(trimLine.substring(hashIndex + 1)) } 
-        catch (e) { name = trimLine.substring(hashIndex + 1) }
+        try {
+          name = decodeURIComponent(trimLine.substring(hashIndex + 1))
+        } catch (e) {
+          name = trimLine.substring(hashIndex + 1)
+        }
       }
       nodes.push({ name: name, type: protocol, link: trimLine })
       continue
     }
   }
   
-  // Fallback for YAML proxies names
+  // 兼容 Clash YAML 格式的名称提取
   if (nodes.length === 0) {
      const nameRegex = /^\s*-\s*(?:name:|{\s*name:)\s*(.+?)(?:}|)\s*$/gm
      let match
@@ -151,13 +158,15 @@ const parseNodes = (text) => {
   return nodes
 }
 
-// --- 检测接口 (集成清洗逻辑) ---
+// --- 5. 检测接口 (Check) ---
 app.post('/check', async (c) => {
   try {
-    const { url, type, needNodes, params } = await c.req.json() // params 是该订阅的本地规则
+    const body = await c.req.json()
+    const { url, type, needNodes, params } = body
+    
     if (!url) return c.json({ success: false, error: '链接为空' })
 
-    // 获取全局规则
+    // 获取全局过滤规则
     let globalParams = null
     try {
         const { results } = await c.env.DB.prepare("SELECT value FROM settings WHERE key = 'filter_config'").all()
@@ -168,12 +177,11 @@ app.post('/check', async (c) => {
 
     let resultData = { valid: false, nodeCount: 0, stats: null, location: null, nodes: [] }
 
-    // >>> 场景1：自建节点
+    // 场景1：自建节点
     if (type === 'node') {
       let nodeList = parseNodes(url)
       if (nodeList.length === 0) return c.json({ success: false, error: '未检测到有效节点' })
       
-      // 应用清洗
       nodeList = cleanNodes(nodeList, globalParams, params)
       
       resultData.valid = true
@@ -194,15 +202,18 @@ app.post('/check', async (c) => {
       return c.json({ success: true, data: resultData })
     }
 
-    // >>> 场景2：机场订阅
+    // 场景2：机场订阅 (双重探测)
     const [clashRes, v2rayRes] = await Promise.all([
       fetch(url, { headers: { 'User-Agent': 'Clash/1.0' } }).catch(e => null),
       fetch(url, { headers: { 'User-Agent': 'v2rayNG/1.8.5' } }).catch(e => null)
     ])
+    
     const validRes = clashRes || v2rayRes
-    if (!validRes || !validRes.ok) return c.json({ success: false, error: `连接失败` })
+    if (!validRes || !validRes.ok) {
+        return c.json({ success: false, error: `连接失败` })
+    }
 
-    // 流量
+    // 解析流量
     const infoHeader = (clashRes && clashRes.headers.get('subscription-userinfo')) || (v2rayRes && v2rayRes.headers.get('subscription-userinfo'))
     if (infoHeader) {
       const info = {}
@@ -222,11 +233,11 @@ app.post('/check', async (c) => {
       }
     }
 
-    // 节点处理
+    // 解析节点
     const text = (v2rayRes && v2rayRes.ok) ? await v2rayRes.text() : await clashRes.text()
     let nodeList = parseNodes(text)
     
-    // 应用清洗 (关键步骤)
+    // 应用清洗
     nodeList = cleanNodes(nodeList, globalParams, params)
 
     resultData.valid = true
@@ -240,7 +251,8 @@ app.post('/check', async (c) => {
   }
 })
 
-// --- 列表 CRUD (支持 params) ---
+// --- 6. 数据库增删改查 ---
+
 app.get('/subs', async (c) => {
   if (!c.env.DB) return c.json({ error: 'DB未绑定' }, 500)
   const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all()
@@ -266,12 +278,14 @@ app.put('/subs/:id', async (c) => {
   const { name, url, status, type, info, params } = body
   let query = "UPDATE subscriptions SET updated_at = CURRENT_TIMESTAMP"
   const qParams = []
+  
   if (name !== undefined) { query += ", name = ?"; qParams.push(name); }
   if (url !== undefined) { query += ", url = ?"; qParams.push(url); }
   if (status !== undefined) { query += ", status = ?"; qParams.push(status); }
   if (type !== undefined) { query += ", type = ?"; qParams.push(type); }
   if (info !== undefined) { query += ", info = ?"; qParams.push(info ? JSON.stringify(info) : null); }
   if (params !== undefined) { query += ", params = ?"; qParams.push(params ? JSON.stringify(params) : null); }
+  
   query += " WHERE id = ?"
   qParams.push(id)
   await c.env.DB.prepare(query).bind(...qParams).run()
@@ -305,19 +319,18 @@ app.post('/backup/import', async (c) => {
   try { await c.env.DB.batch(batch); return c.json({ success: true }) } catch(e) { return c.json({ success: false, error: e.message }) }
 })
 
-// 设置
 app.get('/settings', async (c) => {
   const { results } = await c.env.DB.prepare("SELECT key, value FROM settings").all()
   const settings = {}
   results.forEach(row => { settings[row.key] = row.value })
   return c.json({ success: true, data: settings })
 })
+
 app.post('/settings', async (c) => {
   const body = await c.req.json()
   const stmt = c.env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
   const batch = []
   for (const [key, value] of Object.entries(body)) {
-      // 如果是对象，转JSON存
       const val = typeof value === 'object' ? JSON.stringify(value) : value
       batch.push(stmt.bind(key, val))
   }

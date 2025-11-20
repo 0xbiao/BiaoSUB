@@ -45,7 +45,6 @@
         .border-warning-custom { border-color: #fbbf24 !important; border-width: 1px; }
         .border-error-custom { border-color: #ef4444 !important; border-width: 1px; }
         
-        /* 滚动条美化 */
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #1e293b; }
         ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
@@ -119,6 +118,9 @@
         <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
             <h2 class="text-xl font-bold text-white flex items-center gap-2"><i class="fa-solid fa-list-ul text-primary"></i> 资源列表</h2>
             <div class="join w-full md:w-auto">
+                <button @click="refreshAll" class="btn btn-neutral join-item border-slate-600" :disabled="refreshingAll">
+                    <i class="fa-solid fa-rotate" :class="{'fa-spin': refreshingAll}"></i> {{ refreshingAll ? '更新中...' : '一键更新' }}
+                </button>
                 <div class="relative w-full md:w-64">
                     <input type="text" v-model="searchText" placeholder="搜索名称或链接..." class="input input-bordered bg-slate-800 border-slate-600 focus:border-primary w-full join-item pl-10" />
                     <i class="fa-solid fa-search absolute left-3 top-3.5 text-slate-500"></i>
@@ -150,6 +152,10 @@
                                 <span v-if="item.info && item.info.location" class="ml-2 text-lg flag-icon" :title="item.info.location.country">{{ getFlagEmoji(item.info.location.code) }}</span>
                             </h2>
                             <p class="text-xs text-slate-500 font-mono mt-1 break-all line-clamp-1">{{ item.url }}</p>
+                            <div class="flex gap-2 mt-2">
+                                <span v-if="item.params && item.params.exclude" class="badge badge-xs badge-warning badge-outline" title="启用了独立过滤"><i class="fa-solid fa-filter mr-1"></i> 过滤</span>
+                                <span v-if="item.params && item.params.rename && item.params.rename.length" class="badge badge-xs badge-info badge-outline" title="启用了节点重命名"><i class="fa-solid fa-eraser mr-1"></i> 重命名</span>
+                             </div>
                             <div v-if="item.info" class="mt-3 bg-slate-900/50 rounded-lg p-2 text-xs text-slate-400 grid grid-cols-2 gap-y-1 gap-x-4">
                                 <template v-if="item.info.stats">
                                     <div class="col-span-2 flex items-center gap-2 mb-1">
@@ -182,20 +188,22 @@
         </div>
 
         <dialog class="modal" :class="{ 'modal-open': showModal }">
-            <div class="modal-box bg-slate-800 border border-slate-700">
+            <div class="modal-box bg-slate-800 border border-slate-700 max-w-2xl">
                 <h3 class="font-bold text-lg text-white mb-4">{{ isEditing ? '编辑资源' : '添加资源' }}</h3>
-                <div v-if="!isEditing" class="tabs tabs-boxed bg-slate-900 mb-4">
-                    <a class="tab flex-1" :class="{ 'tab-active bg-indigo-600 text-white': activeTab === 'subscription' }" @click="activeTab = 'subscription'; checkResult=null">订阅</a>
-                    <a class="tab flex-1" :class="{ 'tab-active bg-pink-600 text-white': activeTab === 'node' }" @click="activeTab = 'node'; checkResult=null">节点</a>
-                </div>
-                <div class="flex flex-col gap-4">
+                
+                <div class="flex flex-col gap-4 mb-6">
+                    <div v-if="!isEditing" class="tabs tabs-boxed bg-slate-900">
+                        <a class="tab flex-1" :class="{ 'tab-active bg-indigo-600 text-white': activeTab === 'subscription' }" @click="activeTab = 'subscription'; checkResult=null">订阅</a>
+                        <a class="tab flex-1" :class="{ 'tab-active bg-pink-600 text-white': activeTab === 'node' }" @click="activeTab = 'node'; checkResult=null">节点</a>
+                    </div>
                     <input type="text" v-model="form.name" placeholder="备注名称" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary" />
                     <div class="relative">
                         <textarea v-if="activeTab === 'node'" v-model="form.url" placeholder="vmess://...&#10;hysteria2://..." class="textarea textarea-bordered w-full h-32 bg-slate-900 border-slate-600 font-mono text-sm pr-12"></textarea>
                         <input v-else type="text" v-model="form.url" placeholder="https://..." class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary pr-12" />
                         <button @click="checkUrl" class="absolute right-2 top-2 btn btn-sm btn-square btn-ghost text-accent hover:bg-slate-700 tooltip tooltip-left" data-tip="检测链接" :disabled="checking"><span v-if="checking" class="loading loading-spinner loading-xs"></span><i v-else class="fa-solid fa-bolt"></i></button>
                     </div>
-                    <div v-if="checkResult" class="alert shadow-lg border border-slate-600 p-3" :class="checkResult.success ? 'bg-slate-900/50' : 'bg-red-900/20'">
+                    
+                     <div v-if="checkResult" class="alert shadow-lg border border-slate-600 p-3" :class="checkResult.success ? 'bg-slate-900/50' : 'bg-red-900/20'">
                         <div class="w-full">
                             <div class="flex items-center gap-2 mb-1"><i class="fa-solid" :class="checkResult.success ? 'fa-circle-check text-success' : 'fa-circle-xmark text-error'"></i><span class="font-bold text-sm">{{ checkResult.message }}</span></div>
                             <div v-if="checkResult.stats" class="grid grid-cols-2 gap-2 text-xs text-slate-400 mt-2 bg-slate-800 p-2 rounded"><div>已用: {{ checkResult.stats.used }}</div><div>总计: {{ checkResult.stats.total }}</div><div>过期: {{ checkResult.stats.expire }}</div><div>节点: {{ checkResult.nodeCount }} 个</div></div>
@@ -203,6 +211,30 @@
                         </div>
                     </div>
                 </div>
+
+                <div class="collapse collapse-arrow bg-slate-900 border border-slate-700 rounded-box mb-4">
+                    <input type="checkbox" /> 
+                    <div class="collapse-title text-sm font-medium text-slate-300"><i class="fa-solid fa-filter mr-2 text-accent"></i> 高级设置：节点清洗与重命名</div>
+                    <div class="collapse-content pt-2">
+                        <div class="form-control w-full mb-4">
+                            <label class="label"><span class="label-text text-xs text-slate-400">排除关键词 (正则/文本)</span></label>
+                            <input type="text" v-model="form.params.exclude" placeholder="例如: 官网|到期|Traffic" class="input input-sm input-bordered w-full bg-slate-800 border-slate-600" />
+                        </div>
+                        <div class="form-control w-full">
+                            <label class="label justify-between">
+                                <span class="label-text text-xs text-slate-400">重命名规则 (支持正则)</span>
+                                <button @click="addRenameRule" class="btn btn-xs btn-ghost text-accent"><i class="fa-solid fa-plus"></i> 新增</button>
+                            </label>
+                            <div v-for="(rule, idx) in form.params.rename" :key="idx" class="flex gap-2 mb-2">
+                                <input type="text" v-model="rule.src" placeholder="原文本/正则" class="input input-sm input-bordered w-1/2 bg-slate-800 border-slate-600" />
+                                <input type="text" v-model="rule.dst" placeholder="替换为" class="input input-sm input-bordered w-1/2 bg-slate-800 border-slate-600" />
+                                <button @click="form.params.rename.splice(idx, 1)" class="btn btn-xs btn-square btn-ghost text-red-400"><i class="fa-solid fa-times"></i></button>
+                            </div>
+                            <div v-if="!form.params.rename || form.params.rename.length === 0" class="text-xs text-slate-600 text-center py-2">暂无重命名规则</div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="modal-action"><button class="btn btn-ghost" @click="showModal=false">取消</button><button class="btn btn-primary" @click="saveItem" :disabled="submitting">保存</button></div>
             </div>
         </dialog>
@@ -239,7 +271,7 @@
                 </div>
 
                 <div class="modal-action flex justify-between items-center mt-4">
-                    <div class="text-xs text-slate-500">仅展示解析成功的节点</div>
+                    <div class="text-xs text-slate-500">仅展示原始解析结果，清洗规则在订阅时生效</div>
                     <div class="flex gap-2">
                         <button class="btn btn-ghost" @click="previewModal.show=false">关闭</button>
                         <button class="btn btn-primary" @click="copyAllNodes" :disabled="previewModal.nodes.length === 0">
@@ -254,6 +286,12 @@
             <div class="modal-box bg-slate-800 border border-slate-700">
                 <h3 class="font-bold text-lg text-white mb-6 flex items-center"><i class="fa-solid fa-sliders mr-2 text-accent"></i> 全局设置</h3>
                 <div class="flex flex-col gap-5">
+                    <div class="form-control w-full">
+                        <label class="label"><span class="label-text text-slate-300 font-bold">全局节点过滤</span></label>
+                        <input type="text" v-model="settingsForm.global_exclude" placeholder="排除关键词，如: 官网|到期|流量" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-accent" />
+                        <label class="label"><span class="label-text-alt text-slate-500">使用正则语法，匹配到的节点将从聚合订阅中移除</span></label>
+                    </div>
+                    <div class="divider"></div>
                     <div class="form-control w-full"><label class="label"><span class="label-text text-slate-300 font-bold">转换服务地址</span></label><input type="text" v-model="settingsForm.sub_converter_url" placeholder="默认公共服务" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-accent" /></div>
                     <div class="form-control w-full"><label class="label"><span class="label-text text-slate-300 font-bold">服务密钥 (Token)</span></label><input type="password" v-model="settingsForm.sub_converter_token" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-accent" /></div>
                     <div class="form-control w-full"><label class="label"><span class="label-text text-slate-300 font-bold">User-Agent</span></label><input type="text" v-model="settingsForm.user_agent" placeholder="v2rayNG/1.8.5" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-accent" /></div>
@@ -288,13 +326,18 @@
             const isLoggedIn = ref(false); const loginPassword = ref(''); const loginLoading = ref(false); const loginError = ref('')
             const items = ref([]); const loading = ref(false); const submitting = ref(false)
             const searchText = ref(''); const filterType = ref('all')
-            const showModal = ref(false); const isEditing = ref(false); const currentId = ref(null); const activeTab = ref('subscription'); const form = ref({ name: '', url: '' })
+            
+            // Form data structure update: include params
+            const showModal = ref(false); const isEditing = ref(false); const currentId = ref(null); const activeTab = ref('subscription'); 
+            const form = ref({ name: '', url: '', params: { exclude: '', rename: [] } }) 
+            
             const showSettingsModal = ref(false); const settings = ref({}); const settingsForm = ref({}); const toast = ref({ show: false, message: '', type: 'success' })
             const domain = window.location.origin; const qrModal = ref({ show: false, title: '', url: '' })
             const checking = ref(false); const checkResult = ref(null)
+            const refreshingAll = ref(false)
             let sortableInstance = null
 
-            // 预览模态框状态
+            // Preview Modal
             const previewModal = ref({ show: false, nodes: [] })
             const previewLoading = ref(false)
 
@@ -316,7 +359,15 @@
                 try {
                     const res = await authFetch(`${API_BASE}/subs`)
                     const data = await res.json()
-                    if (data.success) { items.value = data.data; nextTick(() => initSortable()) }
+                    if (data.success) { 
+                        items.value = data.data.map(i => {
+                            // Ensure params structure
+                            if (!i.params) i.params = {}
+                            if (!i.params.rename) i.params.rename = []
+                            return i
+                        }); 
+                        nextTick(() => initSortable()) 
+                    }
                 } catch (e) {} finally { loading.value = false }
             }
 
@@ -336,12 +387,10 @@
             }
             watch([searchText, filterType], () => { if(sortableInstance) sortableInstance.option("disabled", !canSort.value) })
 
-            // 预览功能
             const previewNodes = async (item) => {
                 previewModal.value = { show: true, nodes: [] }
                 previewLoading.value = true
                 try {
-                    // 请求后端解析，带上 needNodes 参数
                     const res = await authFetch(`${API_BASE}/check`, { 
                         method: 'POST', 
                         body: JSON.stringify({ url: item.url, type: item.type, needNodes: true }) 
@@ -365,17 +414,103 @@
                 copyToClip(links)
             }
 
-            // 其他通用函数
+            // --- One Click Refresh ---
+            const refreshAll = async () => {
+                if (refreshingAll.value) return
+                if (!confirm('确定要更新所有订阅吗？这可能需要一些时间。')) return
+                refreshingAll.value = true
+                let successCount = 0
+                let failCount = 0
+                
+                const subs = items.value.filter(i => i.type === 'subscription') // Only refresh subs
+                
+                for (const item of subs) {
+                   try {
+                       item.refreshing = true
+                       const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type }) })
+                       const data = await res.json()
+                       if (data.success) {
+                           item.info = data.data
+                           await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({ info: data.data }) })
+                           successCount++
+                       } else {
+                           failCount++
+                       }
+                   } catch(e) {
+                       failCount++
+                   } finally {
+                       item.refreshing = false
+                   }
+                }
+                refreshingAll.value = false
+                showToast(`更新完成: 成功 ${successCount}, 失败 ${failCount}`)
+            }
+
+
             const fetchSettings = async () => { try { const res = await authFetch(`${API_BASE}/settings`); const data = await res.json(); if (data.success && data.data) { settings.value = data.data; settingsForm.value = { ...data.data } } } catch (e) {} }
             const saveSettings = async () => { submitting.value=true; try { await authFetch(`${API_BASE}/settings`, { method: 'POST', body: JSON.stringify(settingsForm.value) }); showToast('设置已保存'); settings.value = { ...settingsForm.value }; showSettingsModal.value = false } catch(e){showToast('失败','error')} finally{submitting.value=false} }
-            const checkUrl = async () => { if (!form.value.url) return showToast('请输入链接', 'error'); checking.value = true; checkResult.value = null; try { const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: form.value.url, type: activeTab.value }) }); const data = await res.json(); if (data.success) { checkResult.value = { success: true, message: '连接成功', ...data.data } } else { checkResult.value = { success: false, message: data.error || '连接失败' } } } catch (e) { checkResult.value = { success: false, message: '请求失败' } } finally { checking.value = false } }
+            
+            const checkUrl = async () => { 
+                if (!form.value.url) return showToast('请输入链接', 'error'); 
+                checking.value = true; checkResult.value = null; 
+                try { 
+                    const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: form.value.url, type: activeTab.value }) }); 
+                    const data = await res.json(); 
+                    if (data.success) { checkResult.value = { success: true, message: '连接成功', ...data.data } } 
+                    else { checkResult.value = { success: false, message: data.error || '连接失败' } } 
+                } catch (e) { checkResult.value = { success: false, message: '请求失败' } } 
+                finally { checking.value = false } 
+            }
+            
             const refreshItem = async (item) => { item.refreshing = true; try { const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type }) }); const data = await res.json(); if (data.success) { item.info = data.data; await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({ info: data.data }) }); showToast('刷新成功') } else { showToast(data.error || '刷新失败', 'error') } } catch (e) { showToast('网络错误', 'error') } finally { item.refreshing = false } }
-            const saveItem = async () => { if (!form.value.name || !form.value.url) return showToast('请填写完整', 'error'); submitting.value = true; try { const url = isEditing.value ? `${API_BASE}/subs/${currentId.value}` : `${API_BASE}/subs`; const method = isEditing.value ? 'PUT' : 'POST'; const info = checkResult.value && checkResult.value.success ? { stats: checkResult.value.stats, nodeCount: checkResult.value.nodeCount, location: checkResult.value.location } : null; const payload = { name: form.value.name, url: form.value.url, type: activeTab.value, info: info }; if ((await (await authFetch(url, { method, body: JSON.stringify(payload) })).json()).success) { showToast('保存成功'); fetchItems(); showModal.value=false; } } catch (e) { showToast('保存失败', 'error') } finally { submitting.value = false } }
+            
+            const saveItem = async () => { 
+                if (!form.value.name || !form.value.url) return showToast('请填写完整', 'error'); 
+                submitting.value = true; 
+                try { 
+                    const url = isEditing.value ? `${API_BASE}/subs/${currentId.value}` : `${API_BASE}/subs`; 
+                    const method = isEditing.value ? 'PUT' : 'POST'; 
+                    const info = checkResult.value && checkResult.value.success ? { stats: checkResult.value.stats, nodeCount: checkResult.value.nodeCount, location: checkResult.value.location } : null; 
+                    // Save params as well
+                    const payload = { name: form.value.name, url: form.value.url, type: activeTab.value, info: info, params: form.value.params }; 
+                    
+                    if ((await (await authFetch(url, { method, body: JSON.stringify(payload) })).json()).success) { 
+                        showToast('保存成功'); 
+                        fetchItems(); 
+                        showModal.value=false; 
+                    } 
+                } catch (e) { showToast('保存失败', 'error') } 
+                finally { submitting.value = false } 
+            }
+            
             const deleteItem = async (id) => { if(confirm('确认删除?')) { await authFetch(`${API_BASE}/subs/${id}`, { method: 'DELETE' }); fetchItems(); } }
             const toggleStatus = async (item) => { item.status = item.status === 1 ? 0 : 1; await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({status: item.status}) }) }
             const copyToClip = (text) => navigator.clipboard.writeText(text).then(() => showToast('已复制'))
             const showQr = async (item) => { qrModal.value = { show: true, title: item.name, url: item.url }; await nextTick(); setTimeout(() => { const c = document.getElementById('qr-canvas'); if(c) new QRious({ element: c, value: item.url, size: 200, level: 'H' }) }, 100) }
-            const openModal = (item) => { checkResult.value=null; if(item) { form.value={...item}; currentId.value=item.id; activeTab.value=item.type; isEditing.value=true } else { form.value={name:'',url:''}; activeTab.value='subscription'; isEditing.value=false } showModal.value=true }
+            
+            const openModal = (item) => { 
+                checkResult.value=null; 
+                if(item) { 
+                    // Deep copy to avoid modifying original list before save
+                    form.value=JSON.parse(JSON.stringify(item)); 
+                    if (!form.value.params) form.value.params = { exclude: '', rename: [] }
+                    if (!form.value.params.rename) form.value.params.rename = []
+                    currentId.value=item.id; 
+                    activeTab.value=item.type; 
+                    isEditing.value=true 
+                } else { 
+                    form.value={name:'',url:'', params: { exclude: '', rename: [] } }; 
+                    activeTab.value='subscription'; 
+                    isEditing.value=false 
+                } 
+                showModal.value=true 
+            }
+
+            const addRenameRule = () => {
+                if (!form.value.params.rename) form.value.params.rename = []
+                form.value.params.rename.push({ src: '', dst: '' })
+            }
+
             const openSettings = () => { settingsForm.value = { ...settings.value }; showSettingsModal.value = true }
             const editItem = (i) => openModal(i)
             
@@ -401,8 +536,9 @@
                 saveItem, deleteItem, toggleStatus, openModal, editItem, openSettings, saveSettings, showQr,
                 toast, copyLink, copyToClip, checkUrl, checking, checkResult, refreshItem, getFlagEmoji,
                 exportData, importData, canSort, getAlertClass, getProgressClass, getTextColorClass, isExpired,
-                // 新增预览相关
-                previewNodes, previewModal, previewLoading, copyAllNodes
+                previewNodes, previewModal, previewLoading, copyAllNodes,
+                // New features
+                addRenameRule, refreshAll, refreshingAll
             }
         }
     }).mount('#app')

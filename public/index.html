@@ -33,196 +33,291 @@
             -webkit-backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
+        /* 登录虚化背景 */
+        .blur-content { filter: blur(5px); pointer-events: none; }
     </style>
 </head>
 <body class="text-slate-200">
 
-<div id="app" class="container mx-auto px-4 py-8 max-w-5xl">
+<div id="app">
     
-    <div class="navbar glass-panel rounded-2xl mb-8 shadow-xl">
-        <div class="flex-1">
-            <a class="btn btn-ghost normal-case text-2xl font-bold bg-gradient-to-r from-primary to-secondary text-transparent bg-clip-text">
-                <i class="fa-solid fa-bolt mr-2 text-yellow-400"></i> BiaoSUB
-            </a>
-        </div>
-        <div class="flex-none gap-3">
-            <button @click="openSettings" class="btn btn-circle btn-ghost hover:bg-slate-700 tooltip tooltip-bottom" data-tip="全局设置">
-                <i class="fa-solid fa-gear text-xl text-slate-400"></i>
-            </button>
-            <button @click="openModal()" class="btn btn-primary btn-sm md:btn-md text-white shadow-lg hover:scale-105 transition-transform">
-                <i class="fa-solid fa-plus"></i> 添加资源
-            </button>
+    <div v-if="!isLoggedIn" class="fixed inset-0 z-[999] flex items-center justify-center bg-slate-900/90 backdrop-blur-sm">
+        <div class="card w-96 glass-panel shadow-2xl border border-slate-600">
+            <div class="card-body text-center">
+                <div class="mb-4">
+                    <i class="fa-solid fa-shield-halved text-5xl text-primary"></i>
+                </div>
+                <h2 class="text-2xl font-bold text-white mb-2">安全验证</h2>
+                <p class="text-slate-400 text-sm mb-6">BiaoSUB 管理面板</p>
+                
+                <input type="password" v-model="loginPassword" @keyup.enter="handleLogin" placeholder="请输入管理员密码" class="input input-bordered w-full bg-slate-800 text-center focus:border-primary mb-4" />
+                
+                <button @click="handleLogin" class="btn btn-primary w-full" :disabled="loginLoading">
+                    <span v-if="loginLoading" class="loading loading-spinner"></span>
+                    {{ loginLoading ? '验证中...' : '解锁面板' }}
+                </button>
+                <p v-if="loginError" class="text-error text-xs mt-3">{{ loginError }}</p>
+            </div>
         </div>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-        <div class="stat glass-panel rounded-2xl shadow-lg">
-            <div class="stat-figure text-primary"><i class="fa-solid fa-globe text-3xl"></i></div>
-            <div class="stat-title text-slate-400">订阅源</div>
-            <div class="stat-value text-primary">{{ subCount }}</div>
-        </div>
+    <div class="container mx-auto px-4 py-8 max-w-5xl transition-all duration-500" :class="{ 'blur-content': !isLoggedIn }">
         
-        <div class="stat glass-panel rounded-2xl shadow-lg">
-            <div class="stat-figure text-secondary"><i class="fa-solid fa-microchip text-3xl"></i></div>
-            <div class="stat-title text-slate-400">独立节点</div>
-            <div class="stat-value text-secondary">{{ nodeCount }}</div>
-        </div>
-
-        <div class="glass-panel rounded-2xl shadow-lg p-6 flex flex-col justify-between relative overflow-hidden group">
-            <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                <i class="fa-solid fa-link text-6xl text-emerald-400"></i>
+        <div class="navbar glass-panel rounded-2xl mb-8 shadow-xl">
+            <div class="flex-1">
+                <a class="btn btn-ghost normal-case text-2xl font-bold bg-gradient-to-r from-primary to-secondary text-transparent bg-clip-text">
+                    <i class="fa-solid fa-bolt mr-2 text-yellow-400"></i> BiaoSUB
+                </a>
             </div>
-            <div>
-                <div class="text-slate-400 text-sm font-bold uppercase tracking-wider">聚合订阅</div>
-                <div class="text-emerald-400 text-2xl font-extrabold mt-1">已就绪</div>
-            </div>
-            <div class="mt-4 flex gap-2">
-                <div class="dropdown dropdown-top dropdown-end w-full">
-                    <label tabindex="0" class="btn btn-sm btn-block bg-emerald-500 hover:bg-emerald-600 text-white border-none">
-                        <i class="fa-solid fa-share-nodes"></i> 获取链接
-                    </label>
-                    <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow-2xl bg-slate-800 rounded-box w-72 border border-slate-600">
-                        <li class="menu-title text-slate-400">选择格式</li>
-                        <li><a @click="copyLink('v2ray')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-paper-plane text-blue-400 w-5"></i> 复制 v2rayN 订阅</a></li>
-                        <li><a @click="copyLink('clash')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-cat text-orange-400 w-5"></i> 复制 Clash 订阅</a></li>
-                        <div class="divider my-1"></div>
-                        <li class="text-xs text-slate-500 px-4 py-1">
-                            转换服务: {{ settings.sub_converter_url ? '自定义' : '默认' }}
-                        </li>
-                    </ul>
+            <div class="flex-none gap-2">
+                <div class="tooltip tooltip-bottom" data-tip="全局设置">
+                    <button @click="openSettings" class="btn btn-circle btn-ghost hover:bg-slate-700">
+                        <i class="fa-solid fa-gear text-xl text-slate-400"></i>
+                    </button>
                 </div>
-            </div>
-        </div>
-    </div>
-
-    <div v-if="loading" class="flex justify-center py-20">
-        <span class="loading loading-infinity loading-lg text-primary"></span>
-    </div>
-    <div v-else class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div v-for="item in items" :key="item.id" 
-             class="card bg-slate-800/50 shadow-xl border border-slate-700 hover:border-primary/50 transition-all duration-300">
-            <div class="card-body p-6">
-                <div class="flex justify-between items-start gap-4">
-                    <div class="mt-1">
-                        <div v-if="item.type === 'subscription'" class="w-10 h-10 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-400"><i class="fa-solid fa-rss"></i></div>
-                        <div v-else class="w-10 h-10 rounded-full bg-pink-500/20 flex items-center justify-center text-pink-400"><i class="fa-solid fa-network-wired"></i></div>
-                    </div>
-                    <div class="flex-1 min-w-0">
-                        <h2 class="card-title text-slate-100 mb-1 text-base items-center">
-                            <span class="truncate">{{ item.name }}</span>
-                            <span :class="item.type==='subscription'?'badge-primary':'badge-secondary'" class="badge badge-xs badge-outline">{{ item.type==='subscription'?'SUB':'NODE' }}</span>
-                        </h2>
-                        <p class="text-xs text-slate-500 font-mono mt-1 break-all line-clamp-1">{{ item.url }}</p>
-                    </div>
-                    <input type="checkbox" class="toggle toggle-success toggle-sm" :checked="item.status === 1" @change="toggleStatus(item)" />
+                <div class="tooltip tooltip-bottom" data-tip="退出登录">
+                    <button @click="logout" class="btn btn-circle btn-ghost hover:bg-slate-700 text-red-400">
+                        <i class="fa-solid fa-power-off text-xl"></i>
+                    </button>
                 </div>
-                <div class="divider my-2 bg-slate-700/50 h-[1px]"></div>
-                <div class="card-actions justify-end gap-2">
-                    <button @click="editItem(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-blue-400"><i class="fa-solid fa-pen"></i></button>
-                    <button @click="deleteItem(item.id)" class="btn btn-ghost btn-xs text-slate-400 hover:text-red-500"><i class="fa-regular fa-trash-can"></i></button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <dialog class="modal" :class="{ 'modal-open': showModal }">
-        <div class="modal-box bg-slate-800 border border-slate-700">
-            <h3 class="font-bold text-lg text-white mb-4">{{ isEditing ? '编辑资源' : '添加资源' }}</h3>
-            <div v-if="!isEditing" class="tabs tabs-boxed bg-slate-900 mb-4">
-                <a class="tab flex-1" :class="{ 'tab-active bg-indigo-600 text-white': activeTab === 'subscription' }" @click="activeTab = 'subscription'">订阅</a>
-                <a class="tab flex-1" :class="{ 'tab-active bg-pink-600 text-white': activeTab === 'node' }" @click="activeTab = 'node'">节点</a>
-            </div>
-            <div class="flex flex-col gap-4">
-                <input type="text" v-model="form.name" placeholder="备注名称" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary" />
-                <textarea v-if="activeTab === 'node'" v-model="form.url" placeholder="vmess://..." class="textarea textarea-bordered h-24 bg-slate-900 border-slate-600 font-mono text-sm"></textarea>
-                <input v-else type="text" v-model="form.url" placeholder="https://..." class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary" />
-            </div>
-            <div class="modal-action">
-                <button class="btn btn-ghost" @click="showModal=false">取消</button>
-                <button class="btn btn-primary" @click="saveItem" :disabled="submitting">保存</button>
-            </div>
-        </div>
-    </dialog>
-
-    <dialog class="modal" :class="{ 'modal-open': showSettingsModal }">
-        <div class="modal-box bg-slate-800 border border-slate-700">
-            <h3 class="font-bold text-lg text-white mb-6 flex items-center">
-                <i class="fa-solid fa-sliders mr-2 text-accent"></i> 全局设置
-            </h3>
-            
-            <div class="flex flex-col gap-5">
-                <div class="form-control w-full">
-                    <label class="label">
-                        <span class="label-text text-slate-300 font-bold">转换服务地址 (Backend URL)</span>
-                        <span class="label-text-alt text-slate-500">例如: sub.my-domain.com</span>
-                    </label>
-                    <input type="text" v-model="settingsForm.sub_converter_url" placeholder="默认使用公共服务" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-accent" />
-                    <label class="label"><span class="label-text-alt text-slate-500">留空则使用公共转换后端 (acl4ssr)</span></label>
-                </div>
-
-                <div class="form-control w-full">
-                    <label class="label">
-                        <span class="label-text text-slate-300 font-bold">服务密钥 (Token/Password)</span>
-                    </label>
-                    <input type="password" v-model="settingsForm.sub_converter_token" placeholder="如果你自建服务设置了密码..." class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-accent" />
-                </div>
-
-                <div class="form-control w-full">
-                    <label class="label">
-                        <span class="label-text text-slate-300 font-bold">自定义 User-Agent</span>
-                    </label>
-                    <input type="text" v-model="settingsForm.user_agent" placeholder="v2rayNG/1.8.5" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-accent" />
-                    <label class="label"><span class="label-text-alt text-slate-500">用于伪装请求头部，防止机场屏蔽</span></label>
-                </div>
-            </div>
-
-            <div class="modal-action mt-8">
-                <button class="btn btn-ghost" @click="showSettingsModal=false">取消</button>
-                <button class="btn btn-accent text-white" @click="saveSettings" :disabled="submitting">
-                    <span v-if="submitting" class="loading loading-spinner"></span> 保存设置
+                <div class="w-[1px] h-6 bg-slate-700 mx-2"></div>
+                <button @click="openModal()" class="btn btn-primary btn-sm md:btn-md text-white shadow-lg hover:scale-105 transition-transform">
+                    <i class="fa-solid fa-plus"></i> 添加资源
                 </button>
             </div>
         </div>
-    </dialog>
 
-    <div v-if="toast.show" class="toast toast-bottom toast-end z-50">
-        <div class="alert shadow-lg text-white" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'">
-            <span>{{ toast.message }}</span>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+            <div class="stat glass-panel rounded-2xl shadow-lg">
+                <div class="stat-figure text-primary"><i class="fa-solid fa-globe text-3xl"></i></div>
+                <div class="stat-title text-slate-400">订阅源</div>
+                <div class="stat-value text-primary">{{ subCount }}</div>
+            </div>
+            
+            <div class="stat glass-panel rounded-2xl shadow-lg">
+                <div class="stat-figure text-secondary"><i class="fa-solid fa-microchip text-3xl"></i></div>
+                <div class="stat-title text-slate-400">独立节点</div>
+                <div class="stat-value text-secondary">{{ nodeCount }}</div>
+            </div>
+
+            <div class="glass-panel rounded-2xl shadow-lg p-6 flex flex-col justify-between relative overflow-hidden group">
+                <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                    <i class="fa-solid fa-link text-6xl text-emerald-400"></i>
+                </div>
+                <div>
+                    <div class="text-slate-400 text-sm font-bold uppercase tracking-wider">聚合订阅</div>
+                    <div class="text-emerald-400 text-2xl font-extrabold mt-1">已就绪</div>
+                </div>
+                <div class="mt-4 flex gap-2">
+                    <div class="dropdown dropdown-top dropdown-end w-full">
+                        <label tabindex="0" class="btn btn-sm btn-block bg-emerald-500 hover:bg-emerald-600 text-white border-none">
+                            <i class="fa-solid fa-share-nodes"></i> 获取链接
+                        </label>
+                        <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow-2xl bg-slate-800 rounded-box w-72 border border-slate-600">
+                            <li class="menu-title text-slate-400">选择格式</li>
+                            <li><a @click="copyLink('v2ray')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-paper-plane text-blue-400 w-5"></i> 复制 v2rayN 订阅</a></li>
+                            <li><a @click="copyLink('clash')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-cat text-orange-400 w-5"></i> 复制 Clash 订阅</a></li>
+                            <div class="divider my-1"></div>
+                            <li class="text-xs text-slate-500 px-4 py-1">
+                                转换服务: {{ settings.sub_converter_url ? '自定义' : '默认' }}
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div v-if="loading" class="flex justify-center py-20">
+            <span class="loading loading-infinity loading-lg text-primary"></span>
+        </div>
+        <div v-else class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div v-for="item in items" :key="item.id" class="card bg-slate-800/50 shadow-xl border border-slate-700 hover:border-primary/50 transition-all duration-300">
+                <div class="card-body p-6">
+                    <div class="flex justify-between items-start gap-4">
+                        <div class="mt-1">
+                            <div v-if="item.type === 'subscription'" class="w-10 h-10 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-400"><i class="fa-solid fa-rss"></i></div>
+                            <div v-else class="w-10 h-10 rounded-full bg-pink-500/20 flex items-center justify-center text-pink-400"><i class="fa-solid fa-network-wired"></i></div>
+                        </div>
+                        <div class="flex-1 min-w-0">
+                            <h2 class="card-title text-slate-100 mb-1 text-base items-center">
+                                <span class="truncate">{{ item.name }}</span>
+                                <span :class="item.type==='subscription'?'badge-primary':'badge-secondary'" class="badge badge-xs badge-outline">{{ item.type==='subscription'?'SUB':'NODE' }}</span>
+                            </h2>
+                            <p class="text-xs text-slate-500 font-mono mt-1 break-all line-clamp-1">{{ item.url }}</p>
+                        </div>
+                        <input type="checkbox" class="toggle toggle-success toggle-sm" :checked="item.status === 1" @change="toggleStatus(item)" />
+                    </div>
+                    <div class="divider my-2 bg-slate-700/50 h-[1px]"></div>
+                    <div class="card-actions justify-end gap-2">
+                        <button @click="editItem(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-blue-400"><i class="fa-solid fa-pen"></i></button>
+                        <button @click="deleteItem(item.id)" class="btn btn-ghost btn-xs text-slate-400 hover:text-red-500"><i class="fa-regular fa-trash-can"></i></button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <dialog class="modal" :class="{ 'modal-open': showModal }">
+            <div class="modal-box bg-slate-800 border border-slate-700">
+                <h3 class="font-bold text-lg text-white mb-4">{{ isEditing ? '编辑资源' : '添加资源' }}</h3>
+                <div v-if="!isEditing" class="tabs tabs-boxed bg-slate-900 mb-4">
+                    <a class="tab flex-1" :class="{ 'tab-active bg-indigo-600 text-white': activeTab === 'subscription' }" @click="activeTab = 'subscription'">订阅</a>
+                    <a class="tab flex-1" :class="{ 'tab-active bg-pink-600 text-white': activeTab === 'node' }" @click="activeTab = 'node'">节点</a>
+                </div>
+                <div class="flex flex-col gap-4">
+                    <input type="text" v-model="form.name" placeholder="备注名称" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary" />
+                    <textarea v-if="activeTab === 'node'" v-model="form.url" placeholder="vmess://..." class="textarea textarea-bordered h-24 bg-slate-900 border-slate-600 font-mono text-sm"></textarea>
+                    <input v-else type="text" v-model="form.url" placeholder="https://..." class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary" />
+                </div>
+                <div class="modal-action">
+                    <button class="btn btn-ghost" @click="showModal=false">取消</button>
+                    <button class="btn btn-primary" @click="saveItem" :disabled="submitting">保存</button>
+                </div>
+            </div>
+        </dialog>
+
+        <dialog class="modal" :class="{ 'modal-open': showSettingsModal }">
+            <div class="modal-box bg-slate-800 border border-slate-700">
+                <h3 class="font-bold text-lg text-white mb-6 flex items-center"><i class="fa-solid fa-sliders mr-2 text-accent"></i> 全局设置</h3>
+                <div class="flex flex-col gap-5">
+                    <div class="form-control w-full">
+                        <label class="label"><span class="label-text text-slate-300 font-bold">转换服务地址</span></label>
+                        <input type="text" v-model="settingsForm.sub_converter_url" placeholder="默认公共服务" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-accent" />
+                    </div>
+                    <div class="form-control w-full">
+                        <label class="label"><span class="label-text text-slate-300 font-bold">服务密钥 (Token)</span></label>
+                        <input type="password" v-model="settingsForm.sub_converter_token" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-accent" />
+                    </div>
+                    <div class="form-control w-full">
+                        <label class="label"><span class="label-text text-slate-300 font-bold">User-Agent</span></label>
+                        <input type="text" v-model="settingsForm.user_agent" placeholder="v2rayNG/1.8.5" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-accent" />
+                    </div>
+                </div>
+                <div class="modal-action mt-8">
+                    <button class="btn btn-ghost" @click="showSettingsModal=false">取消</button>
+                    <button class="btn btn-accent text-white" @click="saveSettings" :disabled="submitting">保存设置</button>
+                </div>
+            </div>
+        </dialog>
+
+        <div v-if="toast.show" class="toast toast-bottom toast-end z-50">
+            <div class="alert shadow-lg text-white" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'"><span>{{ toast.message }}</span></div>
         </div>
     </div>
 </div>
 
 <script>
     const { createApp, ref, onMounted, computed } = Vue
+    const API_BASE = '/api'
 
     createApp({
         setup() {
-            // 状态变量
+            // --- 状态变量 ---
+            const isLoggedIn = ref(false)
+            const loginPassword = ref('')
+            const loginLoading = ref(false)
+            const loginError = ref('')
+            
+            // 资源数据
             const items = ref([])
-            const loading = ref(true)
+            const loading = ref(false) // 初始为 false，登录后才加载
             const submitting = ref(false)
             
-            // 资源弹窗相关
+            // UI 控制
             const showModal = ref(false)
             const isEditing = ref(false)
             const currentId = ref(null)
             const activeTab = ref('subscription')
             const form = ref({ name: '', url: '' })
             
-            // 设置弹窗相关
             const showSettingsModal = ref(false)
-            const settings = ref({}) // 存储获取到的设置
-            const settingsForm = ref({ sub_converter_url: '', sub_converter_token: '', user_agent: '' })
-
+            const settings = ref({})
+            const settingsForm = ref({})
             const toast = ref({ show: false, message: '', type: 'success' })
             const domain = window.location.origin
 
-            // --- API 交互 ---
+            // --- 鉴权核心逻辑 ---
+            
+            // 1. 封装 Fetch，自动带上 Authorization 头
+            const authFetch = async (url, options = {}) => {
+                const token = localStorage.getItem('biaosub_token')
+                const headers = { 
+                    'Content-Type': 'application/json', 
+                    'Authorization': token || '' 
+                }
+                // 合并 headers
+                options.headers = { ...headers, ...options.headers }
+                
+                const res = await fetch(url, options)
+                
+                // 如果返回 401 (未授权)，强制登出
+                if (res.status === 401) {
+                    logout()
+                    throw new Error('未授权或密码过期')
+                }
+                return res
+            }
+
+            // 2. 登录处理
+            const handleLogin = async () => {
+                if (!loginPassword.value) return
+                loginLoading.value = true
+                loginError.value = ''
+                
+                try {
+                    // 尝试请求登录接口
+                    const res = await fetch(`${API_BASE}/login`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ password: loginPassword.value })
+                    })
+                    const data = await res.json()
+                    
+                    if (data.success) {
+                        // 登录成功：保存密码作为 Token (对于个人面板足够安全)
+                        localStorage.setItem('biaosub_token', loginPassword.value)
+                        isLoggedIn.value = true
+                        loginPassword.value = '' // 清空输入框
+                        showToast('欢迎回来')
+                        initData() // 加载数据
+                    } else {
+                        loginError.value = data.error || '密码错误'
+                    }
+                } catch (e) {
+                    loginError.value = '网络连接失败'
+                } finally {
+                    loginLoading.value = false
+                }
+            }
+
+            // 3. 登出
+            const logout = () => {
+                localStorage.removeItem('biaosub_token')
+                isLoggedIn.value = false
+                items.value = [] // 清空敏感数据
+            }
+
+            // 4. 初始化检查
+            const checkLoginStatus = () => {
+                const token = localStorage.getItem('biaosub_token')
+                if (token) {
+                    isLoggedIn.value = true
+                    initData()
+                } else {
+                    isLoggedIn.value = false
+                }
+            }
+
+            // --- 业务逻辑 ---
+
+            const initData = () => {
+                fetchItems()
+                fetchSettings()
+            }
 
             const fetchItems = async () => {
                 loading.value = true
                 try {
-                    const res = await fetch('/api/subs')
+                    const res = await authFetch(`${API_BASE}/subs`)
                     const data = await res.json()
                     if (data.success) items.value = data.data
                 } catch (e) { console.error(e) } finally { loading.value = false }
@@ -230,113 +325,86 @@
 
             const fetchSettings = async () => {
                 try {
-                    const res = await fetch('/api/settings')
+                    const res = await authFetch(`${API_BASE}/settings`)
                     const data = await res.json()
                     if (data.success && data.data) {
                         settings.value = data.data
-                        // 初始化表单
                         settingsForm.value = { ...data.data }
                     }
-                } catch (e) { console.error("Settings load failed", e) }
+                } catch (e) {}
             }
 
             const saveSettings = async () => {
                 submitting.value = true
                 try {
-                    const res = await fetch('/api/settings', {
+                    const res = await authFetch(`${API_BASE}/settings`, {
                         method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify(settingsForm.value)
                     })
-                    const data = await res.json()
-                    if (data.success) {
+                    if ((await res.json()).success) {
                         showToast('设置已保存')
-                        settings.value = { ...settingsForm.value } // 更新本地状态
+                        settings.value = { ...settingsForm.value }
                         showSettingsModal.value = false
                     }
-                } catch (e) { showToast('保存失败', 'error') }
-                finally { submitting.value = false }
+                } catch (e) { showToast('保存失败', 'error') } finally { submitting.value = false }
             }
 
             const saveItem = async () => {
                 if (!form.value.name || !form.value.url) return showToast('请填写完整', 'error')
                 submitting.value = true
                 try {
-                    const url = isEditing.value ? `/api/subs/${currentId.value}` : '/api/subs'
+                    const url = isEditing.value ? `${API_BASE}/subs/${currentId.value}` : `${API_BASE}/subs`
                     const method = isEditing.value ? 'PUT' : 'POST'
                     const payload = { name: form.value.name, url: form.value.url, type: activeTab.value }
-                    const res = await fetch(url, { method, headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) })
+                    const res = await authFetch(url, { method, body: JSON.stringify(payload) })
                     if ((await res.json()).success) { showToast('保存成功'); fetchItems(); showModal.value=false; }
                 } catch (e) { showToast('操作失败', 'error') } finally { submitting.value = false }
             }
 
-            const deleteItem = async (id) => { if(confirm('确认删除?')) { await fetch(`/api/subs/${id}`, { method: 'DELETE' }); fetchItems(); } }
+            const deleteItem = async (id) => { 
+                if(confirm('确认删除?')) { 
+                    await authFetch(`${API_BASE}/subs/${id}`, { method: 'DELETE' })
+                    fetchItems()
+                } 
+            }
             
             const toggleStatus = async (item) => {
                 item.status = item.status === 1 ? 0 : 1
-                await fetch(`/api/subs/${item.id}`, { method: 'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({status: item.status}) })
+                await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({status: item.status}) })
             }
 
-            // --- 辅助功能 ---
-
+            // --- UI 辅助 ---
             const openModal = (item) => {
                 if(item) { form.value = {...item}; currentId.value = item.id; activeTab.value = item.type; isEditing.value = true }
                 else { form.value = {name:'', url:''}; activeTab.value = 'subscription'; isEditing.value = false }
                 showModal.value = true
             }
-            
-            const openSettings = () => {
-                // 每次打开时重置为当前生效的设置
-                settingsForm.value = { ...settings.value }
-                showSettingsModal.value = true
-            }
-
-            // 核心：生成链接逻辑
-            const copyLink = (type) => {
-                // 1. 基础聚合源 (指向 subscribe.js，虽然现在可能不好用，但未来会修复)
-                // 如果你以后想直接用第三方后端转换 "节点列表"，这里可以改
-                const rawSubUrl = `${domain}/subscribe` 
-                
-                // 2. 获取用户设置的转换后端，如果没有则用默认的
-                let backend = settings.value.sub_converter_url
-                if (!backend) backend = "https://api.acl4.ssr/sub" // 默认公共后端
-                
-                // 3. 拼接 URL
-                let finalUrl = ""
-                if (type === 'v2ray') {
-                    // v2ray 通常直接读取 base64，但如果你想走转换也可以
-                    // 这里演示：直接复制聚合链接
-                    finalUrl = rawSubUrl
-                } else if (type === 'clash') {
-                    // 拼接转换参数
-                    finalUrl = `${backend}?target=clash&url=${encodeURIComponent(rawSubUrl)}&insert=false`
-                    
-                    // 如果有 token，加上
-                    if (settings.value.sub_converter_token) {
-                        finalUrl += `&token=${settings.value.sub_converter_token}`
-                    }
-                }
-
-                navigator.clipboard.writeText(finalUrl).then(() => showToast(`已复制 ${type} 链接`))
-            }
-
+            const openSettings = () => { settingsForm.value = { ...settings.value }; showSettingsModal.value = true }
             const showToast = (m, t='success') => { toast.value = {show:true, message:m, type:t}; setTimeout(()=>toast.value.show=false, 3000) }
             const editItem = (i) => openModal(i)
-
             const subCount = computed(() => items.value.filter(i => i.type === 'subscription').length)
             const nodeCount = computed(() => items.value.filter(i => i.type === 'node').length)
 
-            onMounted(() => {
-                fetchItems()
-                fetchSettings() // 加载设置
-            })
+            const copyLink = (type) => {
+                const rawSubUrl = `${domain}/subscribe`
+                let backend = settings.value.sub_converter_url || "https://api.acl4.ssr/sub"
+                let finalUrl = ""
+                if (type === 'v2ray') finalUrl = rawSubUrl
+                else if (type === 'clash') {
+                    finalUrl = `${backend}?target=clash&url=${encodeURIComponent(rawSubUrl)}&insert=false`
+                    if (settings.value.sub_converter_token) finalUrl += `&token=${settings.value.sub_converter_token}`
+                }
+                navigator.clipboard.writeText(finalUrl).then(() => showToast(`已复制 ${type} 链接`))
+            }
+
+            onMounted(checkLoginStatus)
 
             return { 
-                items, loading, submitting, subCount, nodeCount, domain,
-                showModal, isEditing, activeTab, form, 
-                showSettingsModal, settings, settingsForm, // 设置相关暴露给模板
+                isLoggedIn, loginPassword, loginLoading, loginError, handleLogin, logout,
+                items, loading, submitting, subCount, nodeCount,
+                showModal, isEditing, activeTab, form, showSettingsModal, settingsForm, settings,
                 saveItem, deleteItem, toggleStatus, openModal, editItem, openSettings, saveSettings,
-                toast, copyLink 
+                toast, copyLink
             }
         }
     }).mount('#app')

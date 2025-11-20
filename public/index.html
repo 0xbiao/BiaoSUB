@@ -24,6 +24,8 @@
         .cursor-move { cursor: grab; }
         .border-warning-custom { border-color: #fbbf24 !important; border-width: 1px; }
         .border-error-custom { border-color: #ef4444 !important; border-width: 1px; }
+        /* 代码编辑器样式优化 */
+        textarea.code-editor { font-family: 'Menlo', 'Monaco', 'Courier New', monospace; white-space: pre; overflow-wrap: normal; overflow-x: scroll; }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #1e293b; }
         ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
@@ -58,7 +60,6 @@
             </div>
             <div class="flex-none gap-2">
                 <button @click="openTemplateModal" class="btn btn-circle btn-ghost hover:bg-slate-700 tooltip tooltip-bottom" data-tip="配置模板"><i class="fa-solid fa-file-code text-xl text-slate-400"></i></button>
-                
                 <button @click="openSettings" class="btn btn-circle btn-ghost hover:bg-slate-700 tooltip tooltip-bottom" data-tip="全局设置"><i class="fa-solid fa-gear text-xl text-slate-400"></i></button>
                 <button @click="logout" class="btn btn-circle btn-ghost hover:bg-slate-700 text-red-400 tooltip tooltip-bottom" data-tip="退出"><i class="fa-solid fa-power-off text-xl"></i></button>
                 <div class="w-[1px] h-6 bg-slate-700 mx-2"></div>
@@ -78,7 +79,6 @@
                     <div class="stat-title text-slate-400">独立节点</div>
                     <div class="stat-value text-secondary">{{ nodeCount }}</div>
                 </div>
-                
                 <div class="glass-panel rounded-2xl shadow-lg p-6 relative group flex flex-col gap-6 min-h-[160px]">
                     <div class="absolute inset-0 overflow-hidden rounded-2xl pointer-events-none">
                         <div class="absolute -right-6 -top-6 opacity-10 group-hover:opacity-20 transition-opacity">
@@ -97,6 +97,7 @@
                             </label>
                             <ul tabindex="0" class="dropdown-content z-[100] menu p-2 shadow-2xl bg-slate-800 rounded-box w-72 border border-slate-600 mb-2">
                                 <li class="menu-title text-slate-400">选择格式</li>
+                                <li><a @click="copyLink('v2ray')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-paper-plane text-blue-400 w-5"></i> v2rayN 订阅</a></li>
                                 <li><a @click="copyLink('clash')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-cat text-orange-400 w-5"></i> Clash 订阅</a></li>
                                 <div class="divider my-1"></div>
                                 <li class="text-xs text-slate-500 px-4 py-1">转换后端: {{ settings.sub_converter_url ? '自定义' : '默认' }}</li>
@@ -105,7 +106,6 @@
                     </div>
                 </div>
             </div>
-            
             <div class="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div class="glass-panel rounded-2xl shadow-lg p-4 flex flex-col items-center justify-center relative min-h-[250px]">
                      <h3 class="text-slate-400 text-sm font-bold absolute top-4 left-4">总流量池状态</h3>
@@ -159,13 +159,11 @@
                                 <span v-if="item.info && item.info.location" class="ml-2 text-lg flag-icon" :title="item.info.location.country">{{ getFlagEmoji(item.info.location.code) }}</span>
                             </h2>
                             <p class="text-xs text-slate-500 font-mono mt-1 break-all line-clamp-1">{{ item.url }}</p>
-                            
                             <div class="flex gap-2 mt-2 flex-wrap items-center">
-                                <span v-if="item.params && item.params.include && item.params.include.length > 0" class="badge badge-xs badge-success badge-outline" title="已启用自选节点"><i class="fa-solid fa-check mr-1"></i> 已选 {{ item.params.include.length }} 个</span>
-                                <span v-if="item.params && item.params.ua" class="badge badge-xs badge-info badge-outline" title="自定义UA"><i class="fa-solid fa-user-secret mr-1"></i> UA</span>
-                                <span v-if="item.updated_at" class="text-[10px] text-slate-600 ml-auto flex items-center" title="最后更新时间"><i class="fa-regular fa-clock mr-1"></i>{{ formatTime(item.updated_at) }}</span>
+                                <span v-if="item.params && item.params.include && item.params.include.length > 0" class="badge badge-xs badge-success badge-outline"><i class="fa-solid fa-check mr-1"></i> 已选 {{ item.params.include.length }} 个</span>
+                                <span v-if="item.params && item.params.ua" class="badge badge-xs badge-info badge-outline"><i class="fa-solid fa-user-secret mr-1"></i> UA</span>
+                                <span v-if="item.updated_at" class="text-[10px] text-slate-600 ml-auto flex items-center"><i class="fa-regular fa-clock mr-1"></i>{{ formatTime(item.updated_at) }}</span>
                             </div>
-
                             <div v-if="item.info" class="mt-3 bg-slate-900/50 rounded-lg p-2 text-xs text-slate-400 grid grid-cols-2 gap-y-1 gap-x-4">
                                 <template v-if="item.info.stats">
                                     <div class="col-span-2 flex items-center gap-2 mb-1">
@@ -175,9 +173,7 @@
                                     <div><i class="fa-solid fa-download mr-1"></i> {{ item.info.stats.used }} / {{ item.info.stats.total }}</div>
                                     <div :class="{'text-red-400 font-bold': isExpired(item.info.stats.raw_expire)}"><i class="fa-regular fa-clock mr-1"></i> {{ item.info.stats.expire }}</div>
                                 </template>
-                                <div class="col-span-2" :class="{'mt-1 pt-1 border-t border-slate-700': item.info.stats}">
-                                    <i class="fa-solid fa-list-ol mr-1"></i> 包含节点: <span class="text-white font-bold">{{ item.info.nodeCount || 0 }}</span> 个
-                                </div>
+                                <div class="col-span-2" :class="{'mt-1 pt-1 border-t border-slate-700': item.info.stats}"><i class="fa-solid fa-list-ol mr-1"></i> 包含节点: <span class="text-white font-bold">{{ item.info.nodeCount || 0 }}</span> 个</div>
                             </div>
                         </div>
                         <input type="checkbox" class="toggle toggle-success toggle-sm" :checked="item.status === 1" @change="toggleStatus(item)" />
@@ -201,12 +197,10 @@
         <dialog class="modal" :class="{ 'modal-open': showModal }">
             <div class="modal-box bg-slate-800 border border-slate-700 max-w-2xl">
                 <h3 class="font-bold text-lg text-white mb-4">{{ isEditing ? '编辑资源' : '添加资源' }}</h3>
-                
                 <div v-if="!isEditing" class="tabs tabs-boxed bg-slate-900 mb-4">
                     <a class="tab flex-1" :class="{ 'tab-active bg-indigo-600 text-white': activeTab === 'subscription' }" @click="activeTab = 'subscription'; checkResult=null">订阅</a>
                     <a class="tab flex-1" :class="{ 'tab-active bg-pink-600 text-white': activeTab === 'node' }" @click="activeTab = 'node'; checkResult=null">节点</a>
                 </div>
-                
                 <div class="flex flex-col gap-4 mb-6">
                     <input type="text" v-model="form.name" placeholder="备注名称" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary" />
                     <div class="relative">
@@ -214,7 +208,6 @@
                         <input v-else type="text" v-model="form.url" placeholder="https://..." class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary pr-12" />
                         <button @click="checkUrl" class="absolute right-2 top-2 btn btn-sm btn-square btn-ghost text-accent hover:bg-slate-700 tooltip tooltip-left" data-tip="检测链接" :disabled="checking"><span v-if="checking" class="loading loading-spinner loading-xs"></span><i v-else class="fa-solid fa-bolt"></i></button>
                     </div>
-                    
                     <div v-if="checkResult" class="alert shadow-lg border border-slate-600 p-3" :class="checkResult.success ? 'bg-slate-900/50' : 'bg-red-900/20'">
                         <div class="w-full">
                             <div class="flex items-center gap-2 mb-1"><i class="fa-solid" :class="checkResult.success ? 'fa-circle-check text-success' : 'fa-circle-xmark text-error'"></i><span class="font-bold text-sm">{{ checkResult.message }}</span></div>
@@ -223,27 +216,20 @@
                         </div>
                     </div>
                 </div>
-
-                 <div class="collapse collapse-arrow bg-slate-900 border border-slate-700 rounded-box mb-4">
+                <div class="collapse collapse-arrow bg-slate-900 border border-slate-700 rounded-box mb-4">
                     <input type="checkbox" /> 
                     <div class="collapse-title text-sm font-medium text-slate-300 flex justify-between items-center pr-10">
                         <div><i class="fa-solid fa-sliders mr-2 text-accent"></i> 高级设置 (自选/UA)</div>
-                        <div class="flex gap-2">
-                             <span v-if="form.params.include.length > 0" class="badge badge-xs badge-primary">已选 {{ form.params.include.length }}</span>
-                             <span v-if="form.params.ua" class="badge badge-xs badge-info">UA</span>
-                        </div>
+                        <div class="flex gap-2"><span v-if="form.params.include.length > 0" class="badge badge-xs badge-primary">已选 {{ form.params.include.length }}</span><span v-if="form.params.ua" class="badge badge-xs badge-info">UA</span></div>
                     </div>
                     <div class="collapse-content pt-2">
                         <div class="form-control w-full mb-4" v-if="activeTab === 'subscription'">
                             <label class="label"><span class="label-text text-xs text-slate-400">自定义 User-Agent (可选)</span></label>
                             <input type="text" v-model="form.params.ua" placeholder="例如: Clash/1.0 (留空则使用默认)" class="input input-sm input-bordered w-full bg-slate-800 border-slate-600 text-xs font-mono" />
                         </div>
-
                         <div class="divider text-xs text-slate-600 my-1">节点筛选</div>
                         <p class="text-xs text-slate-500 mb-3">勾选你需要的节点。如果不勾选任何项，则默认包含所有节点。</p>
-                        
                         <div v-if="selectionLoading" class="flex justify-center py-4"><span class="loading loading-spinner text-primary"></span></div>
-                        
                         <div v-else-if="selectionNodes.length > 0" class="max-h-48 overflow-y-auto custom-scrollbar bg-slate-800 rounded p-2">
                              <div class="flex justify-between mb-2 px-1">
                                 <button @click="selectAllNodes" class="btn btn-xs btn-ghost">全选</button>
@@ -255,43 +241,57 @@
                                  <span class="badge badge-xs badge-outline text-[10px]">{{ node.type }}</span>
                              </label>
                         </div>
-                        
-                        <div v-else class="text-center py-4">
-                             <button @click="loadNodesForSelection" class="btn btn-sm btn-outline btn-accent">
-                                <i class="fa-solid fa-cloud-arrow-down"></i> 加载节点列表
-                             </button>
-                        </div>
+                        <div v-else class="text-center py-4"><button @click="loadNodesForSelection" class="btn btn-sm btn-outline btn-accent"><i class="fa-solid fa-cloud-arrow-down"></i> 加载节点列表</button></div>
                     </div>
                 </div>
-
                 <div class="modal-action"><button class="btn btn-ghost" @click="showModal=false">取消</button><button class="btn btn-primary" @click="saveItem" :disabled="submitting">保存</button></div>
             </div>
         </dialog>
 
         <dialog class="modal" :class="{ 'modal-open': showTemplateModal }">
-            <div class="modal-box bg-slate-800 border border-slate-700 w-11/12 max-w-5xl h-5/6 flex flex-col">
-                <div class="flex justify-between items-center mb-4">
+            <div class="modal-box bg-slate-800 border border-slate-700 w-11/12 max-w-5xl h-5/6 flex flex-col p-0 overflow-hidden">
+                <div class="flex justify-between items-center p-4 bg-slate-900 border-b border-slate-700">
                     <h3 class="font-bold text-lg text-white flex items-center gap-2">
-                        <i class="fa-solid fa-file-code text-primary"></i> 默认配置模板 (YAML)
+                        <i class="fa-solid fa-file-code text-primary"></i> 配置模板管理
                     </h3>
-                    <button class="btn btn-sm btn-circle btn-ghost" @click="showTemplateModal=false">✕</button>
-                </div>
-                
-                <div class="flex-1 relative">
-                    <textarea v-model="templateContent" class="textarea textarea-bordered w-full h-full bg-slate-900 font-mono text-sm leading-relaxed" placeholder="Loading..."></textarea>
-                </div>
-                
-                <div class="modal-action flex justify-between items-center mt-4">
-                    <div class="text-xs text-slate-500">
-                        占位符: <code class="bg-slate-700 px-1 rounded text-warning">&lt;BIAOSUB_PROXIES&gt;</code> (节点), <code class="bg-slate-700 px-1 rounded text-warning">&lt;BIAOSUB_GROUP_ALL&gt;</code> (组名)
-                    </div>
                     <div class="flex gap-2">
-                        <button class="btn btn-ghost" @click="showTemplateModal=false">取消</button>
-                        <button class="btn btn-primary" @click="saveTemplate" :disabled="templateSaving">
-                            <span v-if="templateSaving" class="loading loading-spinner loading-xs"></span>
-                            保存模板
-                        </button>
+                        <div class="join">
+                            <button class="join-item btn btn-sm" :class="templateTab === 'edit' ? 'btn-primary' : 'btn-ghost'" @click="templateTab = 'edit'">编辑模板</button>
+                            <button class="join-item btn btn-sm" :class="templateTab === 'preview' ? 'btn-secondary' : 'btn-ghost'" @click="generatePreview">预览结果</button>
+                        </div>
+                        <button class="btn btn-sm btn-circle btn-ghost ml-4" @click="showTemplateModal=false">✕</button>
                     </div>
+                </div>
+                
+                <div class="flex-1 overflow-hidden relative">
+                    <div v-show="templateTab === 'edit'" class="h-full flex flex-col">
+                        <div class="bg-slate-800 p-2 text-xs text-slate-500 flex justify-between items-center border-b border-slate-700">
+                            <span>必填占位符: <code class="text-warning">&lt;BIAOSUB_PROXIES&gt;</code> (节点), <code class="text-warning">&lt;BIAOSUB_GROUP_ALL&gt;</code> (组)</span>
+                            <button @click="resetTemplateToDefault" class="btn btn-xs btn-warning btn-outline">
+                                <i class="fa-solid fa-rotate-left"></i> 重置为默认 (修复排版)
+                            </button>
+                        </div>
+                        <textarea v-model="templateContent" class="code-editor w-full h-full bg-[#1e1e1e] text-slate-300 p-4 outline-none resize-none text-sm leading-6" spellcheck="false"></textarea>
+                    </div>
+
+                    <div v-show="templateTab === 'preview'" class="h-full flex flex-col">
+                        <div class="bg-slate-800 p-2 text-xs text-slate-500 border-b border-slate-700 flex justify-between items-center">
+                            <span><i class="fa-solid fa-eye"></i> 这是根据当前所有节点生成的最终 YAML 预览</span>
+                            <button @click="copyPreview" class="btn btn-xs btn-ghost"><i class="fa-regular fa-copy"></i> 复制</button>
+                        </div>
+                        <div class="flex-1 overflow-auto bg-[#1e1e1e] p-4">
+                            <pre v-if="previewContent" class="text-sm font-mono text-green-400 whitespace-pre-wrap">{{ previewContent }}</pre>
+                            <div v-else class="flex justify-center items-center h-full text-slate-500">点击“预览结果”生成...</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="p-4 bg-slate-900 border-t border-slate-700 flex justify-end gap-2">
+                    <button class="btn btn-ghost" @click="showTemplateModal=false">关闭</button>
+                    <button v-if="templateTab === 'edit'" class="btn btn-primary" @click="saveTemplate" :disabled="templateSaving">
+                        <span v-if="templateSaving" class="loading loading-spinner loading-xs"></span>
+                        保存模板
+                    </button>
                 </div>
             </div>
         </dialog>
@@ -299,10 +299,7 @@
         <dialog class="modal" :class="{ 'modal-open': previewModal.show }">
             <div class="modal-box bg-slate-800 border border-slate-700 w-11/12 max-w-3xl">
                 <div class="flex justify-between items-center mb-4">
-                    <h3 class="font-bold text-lg text-white flex items-center gap-2">
-                        <i class="fa-solid fa-list-check text-primary"></i> 节点预览 
-                        <span class="badge badge-neutral">{{ previewModal.nodes.length }}</span>
-                    </h3>
+                    <h3 class="font-bold text-lg text-white flex items-center gap-2"><i class="fa-solid fa-list-check text-primary"></i> 节点预览 <span class="badge badge-neutral">{{ previewModal.nodes.length }}</span></h3>
                     <button class="btn btn-sm btn-circle btn-ghost" @click="previewModal.show=false">✕</button>
                 </div>
                 <div class="bg-slate-900 rounded-lg p-1 min-h-[200px] max-h-[60vh] overflow-y-auto custom-scrollbar">
@@ -315,18 +312,13 @@
                                 <span class="badge badge-sm badge-outline shrink-0 w-16 justify-center">{{ node.type }}</span>
                                 <span class="text-sm text-slate-200 truncate flex-1" :title="node.name">{{ node.name }}</span>
                             </div>
-                            <button v-if="node.link" @click="copyToClip(node.link)" class="btn btn-ghost btn-xs text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <i class="fa-regular fa-copy"></i>
-                            </button>
+                            <button v-if="node.link" @click="copyToClip(node.link)" class="btn btn-ghost btn-xs text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity"><i class="fa-regular fa-copy"></i></button>
                         </div>
                     </div>
                 </div>
                 <div class="modal-action flex justify-between items-center mt-4">
                     <div class="text-xs text-slate-500">仅展示解析成功的节点</div>
-                    <div class="flex gap-2">
-                        <button class="btn btn-ghost" @click="previewModal.show=false">关闭</button>
-                        <button class="btn btn-primary" @click="copyAllNodes" :disabled="previewModal.nodes.length === 0"><i class="fa-regular fa-copy"></i> 复制全部节点</button>
-                    </div>
+                    <div class="flex gap-2"><button class="btn btn-ghost" @click="previewModal.show=false">关闭</button><button class="btn btn-primary" @click="copyAllNodes" :disabled="previewModal.nodes.length === 0"><i class="fa-regular fa-copy"></i> 复制全部节点</button></div>
                 </div>
             </div>
         </dialog>
@@ -364,35 +356,109 @@
     const { createApp, ref, onMounted, computed, nextTick, watch } = Vue
     const API_BASE = '/api'
 
+    // 默认模板常量（用于重置）
+    const DEFAULT_TEMPLATE = `port: 7890
+socks-port: 7891
+mixed-port: 7892
+allow-lan: false
+bind-address: "*"
+mode: rule
+log-level: info
+ipv6: false
+find-process-mode: strict
+external-controller: "127.0.0.1:9090"
+profile:
+  store-selected: true
+  store-fake-ip: true
+unified-delay: true
+tcp-concurrent: true
+ntp:
+  enable: true
+  write-to-system: false
+  server: ntp.aliyun.com
+  port: 123
+  interval: 30
+dns:
+  enable: true
+  respect-rules: true
+  use-system-hosts: true
+  prefer-h3: false
+  listen: "0.0.0.0:1053"
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  use-hosts: true
+  fake-ip-filter:
+    - +.lan
+    - +.local
+    - localhost.ptlogin2.qq.com
+    - +.msftconnecttest.com
+    - +.msftncsi.com
+  nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+    - "https://1.1.1.1/dns-query"
+    - "https://dns.quad9.net/dns-query"
+  default-nameserver:
+    - 1.1.1.1
+    - 8.8.8.8
+  proxy-server-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  fallback:
+    - "https://1.0.0.1/dns-query"
+    - "https://9.9.9.10/dns-query"
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr:
+      - 240.0.0.0/4
+tun:
+  enable: true
+  stack: system
+  auto-route: true
+  auto-detect-interface: true
+  strict-route: false
+  dns-hijack:
+    - "any:53"
+  device: SakuraiTunnel
+  endpoint-independent-nat: true
+proxies:
+  <BIAOSUB_PROXIES>
+
+proxy-groups:
+  - name: 主代理
+    type: select
+    proxies:
+      <BIAOSUB_GROUP_ALL>
+
+rules:
+  - RULE-SET,private_ip,DIRECT,no-resolve
+  - RULE-SET,cn_ip,DIRECT
+  - RULE-SET,cn_domain,DIRECT
+  - RULE-SET,geolocation-!cn,主代理
+  - MATCH,主代理`;
+
     createApp({
         setup() {
             const isLoggedIn = ref(false); const loginPassword = ref(''); const loginLoading = ref(false); const loginError = ref('')
             const items = ref([]); const loading = ref(false); const submitting = ref(false)
             const searchText = ref(''); const filterType = ref('all')
-            
             const showModal = ref(false); const isEditing = ref(false); const currentId = ref(null); const activeTab = ref('subscription'); 
             const form = ref({ name: '', url: '', params: { include: [], ua: '' } }) 
-            
-            const selectionLoading = ref(false)
-            const selectionNodes = ref([])
-
+            const selectionLoading = ref(false); const selectionNodes = ref([])
             const showSettingsModal = ref(false); const settings = ref({}); const settingsForm = ref({}); const toast = ref({ show: false, message: '', type: 'success' })
             const domain = window.location.origin; const qrModal = ref({ show: false, title: '', url: '' })
-            const checking = ref(false); const checkResult = ref(null)
-            let sortableInstance = null
+            const checking = ref(false); const checkResult = ref(null); let sortableInstance = null
+            const refreshingAll = ref(false); const previewModal = ref({ show: false, nodes: [] }); const previewLoading = ref(false)
+            let trafficChartInstance = null; let usageChartInstance = null
             
-            const refreshingAll = ref(false)
-            const previewModal = ref({ show: false, nodes: [] })
-            const previewLoading = ref(false)
-
-            // Template Vars
+            // Template Logic
             const showTemplateModal = ref(false)
             const templateContent = ref('')
             const templateSaving = ref(false)
-
-            // Charts
-            let trafficChartInstance = null
-            let usageChartInstance = null
+            const templateTab = ref('edit') // 'edit' or 'preview'
+            const previewContent = ref('')
 
             const authFetch = async (url, options = {}) => {
                 const token = localStorage.getItem('biaosub_token')
@@ -419,10 +485,7 @@
                             if (!i.params.ua) i.params.ua = ''
                             return i
                         }); 
-                        nextTick(() => {
-                            initSortable()
-                            initCharts()
-                        }) 
+                        nextTick(() => { initSortable(); initCharts() }) 
                     }
                 } catch (e) {} finally { loading.value = false }
             }
@@ -435,12 +498,11 @@
                 } catch(e) { return '时间错误' }
             }
 
-            // --- Charts Logic ---
+            // Charts
             const initCharts = () => {
                 if (!items.value) return
                 let totalUsed = 0; let totalAvailable = 0; let hasTotalData = false
                 const subNames = []; const subUsage = []
-
                 items.value.forEach(item => {
                     if (item.info && item.info.stats && item.info.stats.raw_total) {
                         const used = item.info.stats.raw_used || 0
@@ -449,23 +511,15 @@
                         subNames.push(item.name); subUsage.push(used)
                     }
                 })
-
                 const ctxTraffic = document.getElementById('trafficChart')
                 if (ctxTraffic) {
                     if (trafficChartInstance) trafficChartInstance.destroy()
                     trafficChartInstance = new Chart(ctxTraffic, {
                         type: 'doughnut',
-                        data: {
-                            labels: ['已用流量', '剩余流量'],
-                            datasets: [{
-                                data: hasTotalData ? [totalUsed, Math.max(0, totalAvailable - totalUsed)] : [0, 1],
-                                backgroundColor: ['#ec4899', '#334155'], borderWidth: 0
-                            }]
-                        },
+                        data: { labels: ['已用流量', '剩余流量'], datasets: [{ data: hasTotalData ? [totalUsed, Math.max(0, totalAvailable - totalUsed)] : [0, 1], backgroundColor: ['#ec4899', '#334155'], borderWidth: 0 }] },
                         options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: '#94a3b8' } } }, cutout: '70%' }
                     })
                 }
-
                 const ctxUsage = document.getElementById('usageChart')
                 if (ctxUsage) {
                     if (usageChartInstance) usageChartInstance.destroy()
@@ -480,7 +534,6 @@
                 }
             }
             watch(items, () => { nextTick(initCharts) }, { deep: true })
-
 
             const canSort = computed(() => searchText.value === '' && filterType.value === 'all')
             const initSortable = () => {
@@ -503,45 +556,21 @@
                 selectionLoading.value = true
                 selectionNodes.value = []
                 try {
-                    const res = await authFetch(`${API_BASE}/check`, { 
-                        method: 'POST', 
-                        body: JSON.stringify({ url: form.value.url, type: activeTab.value, needNodes: true, ua: form.value.params.ua }) 
-                    })
+                    const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: form.value.url, type: activeTab.value, needNodes: true, ua: form.value.params.ua }) })
                     const data = await res.json()
-                    if (data.success && data.data.nodes) {
-                        selectionNodes.value = data.data.nodes
-                    } else {
-                        showToast('加载节点失败', 'error')
-                    }
-                } catch (e) {
-                    showToast('网络错误', 'error')
-                } finally {
-                    selectionLoading.value = false
-                }
+                    if (data.success && data.data.nodes) { selectionNodes.value = data.data.nodes } else { showToast('加载节点失败', 'error') }
+                } catch (e) { showToast('网络错误', 'error') } finally { selectionLoading.value = false }
             }
-            const selectAllNodes = () => {
-                form.value.params.include = selectionNodes.value.map(n => n.name)
-            }
+            const selectAllNodes = () => { form.value.params.include = selectionNodes.value.map(n => n.name) }
 
             const previewNodes = async (item) => {
                 previewModal.value = { show: true, nodes: [] }
                 previewLoading.value = true
                 try {
-                    const res = await authFetch(`${API_BASE}/check`, { 
-                        method: 'POST', 
-                        body: JSON.stringify({ url: item.url, type: item.type, needNodes: true, ua: item.params ? item.params.ua : '' }) 
-                    })
+                    const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type, needNodes: true, ua: item.params ? item.params.ua : '' }) })
                     const data = await res.json()
-                    if (data.success && data.data.nodes) {
-                        previewModal.value.nodes = data.data.nodes
-                    } else {
-                        showToast('获取节点列表失败', 'error')
-                    }
-                } catch (e) {
-                    showToast('网络错误', 'error')
-                } finally {
-                    previewLoading.value = false
-                }
+                    if (data.success && data.data.nodes) { previewModal.value.nodes = data.data.nodes } else { showToast('获取节点列表失败', 'error') }
+                } catch (e) { showToast('网络错误', 'error') } finally { previewLoading.value = false }
             }
 
             const copyAllNodes = () => {
@@ -560,15 +589,8 @@
                         item.refreshing = true
                         const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type, ua: item.params ? item.params.ua : '' }) })
                         const data = await res.json()
-                        if (data.success) {
-                            item.info = data.data
-                            item.updated_at = new Date().toISOString()
-                            await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({ info: data.data }) })
-                        }
-                    } catch (e) {
-                    } finally {
-                        item.refreshing = false
-                    }
+                        if (data.success) { item.info = data.data; item.updated_at = new Date().toISOString(); await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({ info: data.data }) }) }
+                    } catch (e) {} finally { item.refreshing = false }
                 }
                 refreshingAll.value = false
                 showToast(`更新完成`)
@@ -587,28 +609,15 @@
                     const method = isEditing.value ? 'PUT' : 'POST'; 
                     const info = checkResult.value && checkResult.value.success ? { stats: checkResult.value.stats, nodeCount: checkResult.value.nodeCount, location: checkResult.value.location } : null; 
                     const payload = { name: form.value.name, url: form.value.url, type: activeTab.value, info: info, params: form.value.params }; 
-                    if ((await (await authFetch(url, { method, body: JSON.stringify(payload) })).json()).success) { 
-                        showToast('保存成功'); 
-                        fetchItems(); 
-                        showModal.value=false; 
-                    } 
-                } catch (e) { showToast('保存失败', 'error') } 
-                finally { submitting.value = false } 
+                    if ((await (await authFetch(url, { method, body: JSON.stringify(payload) })).json()).success) { showToast('保存成功'); fetchItems(); showModal.value=false; } 
+                } catch (e) { showToast('保存失败', 'error') } finally { submitting.value = false } 
             }
             
             const cloneItem = (item) => {
                 const cloned = JSON.parse(JSON.stringify(item))
-                cloned.id = null 
-                cloned.name = cloned.name + ' (副本)'
-                form.value = cloned
-                activeTab.value = cloned.type
-                isEditing.value = false 
-                checkResult.value = null
-                selectionNodes.value = []
+                cloned.id = null; cloned.name = cloned.name + ' (副本)'; form.value = cloned; activeTab.value = cloned.type; isEditing.value = false; checkResult.value = null; selectionNodes.value = []
                 showModal.value = true
-                if (cloned.params && cloned.params.include && cloned.params.include.length > 0) {
-                     loadNodesForSelection()
-                }
+                if (cloned.params && cloned.params.include && cloned.params.include.length > 0) { loadNodesForSelection() }
             }
 
             const deleteItem = async (id) => { if(confirm('确认删除?')) { await authFetch(`${API_BASE}/subs/${id}`, { method: 'DELETE' }); fetchItems(); } }
@@ -617,85 +626,105 @@
             const showQr = async (item) => { qrModal.value = { show: true, title: item.name, url: item.url }; await nextTick(); setTimeout(() => { const c = document.getElementById('qr-canvas'); if(c) new QRious({ element: c, value: item.url, size: 200, level: 'H' }) }, 100) }
             
             const openModal = (item) => { 
-                checkResult.value=null; 
-                selectionNodes.value = []; 
+                checkResult.value=null; selectionNodes.value = []; 
                 if(item) { 
                     form.value=JSON.parse(JSON.stringify(item)); 
                     if (!form.value.params) form.value.params = {}
                     if (!form.value.params.include) form.value.params.include = []
                     if (!form.value.params.ua) form.value.params.ua = ''
-                    
-                    currentId.value=item.id; 
-                    activeTab.value=item.type; 
-                    isEditing.value=true 
-                    
-                    if (form.value.params.include.length > 0) {
-                         loadNodesForSelection()
-                    }
+                    currentId.value=item.id; activeTab.value=item.type; isEditing.value=true 
+                    if (form.value.params.include.length > 0) { loadNodesForSelection() }
                 } else { 
-                    form.value={name:'',url:'', params: { include: [], ua: '' } }; 
-                    activeTab.value='subscription'; 
-                    isEditing.value=false 
+                    form.value={name:'',url:'', params: { include: [], ua: '' } }; activeTab.value='subscription'; isEditing.value=false 
                 } 
                 showModal.value=true 
             }
 
-            // Template Logic
+            // Template Logic (Enhanced)
             const openTemplateModal = async () => {
-                showTemplateModal.value = true
-                templateContent.value = 'Loading...'
+                showTemplateModal.value = true; templateTab.value = 'edit'; templateContent.value = 'Loading...'
                 try {
                     const res = await authFetch(`${API_BASE}/template/default`)
                     const data = await res.json()
-                    if (data.success) {
-                        templateContent.value = data.data
-                    } else {
-                        templateContent.value = '获取模板失败或暂无默认模板'
-                    }
-                } catch (e) {
-                    templateContent.value = '网络错误'
+                    if (data.success) { templateContent.value = data.data } 
+                    else { templateContent.value = '' }
+                } catch (e) { templateContent.value = 'Error' }
+            }
+
+            const resetTemplateToDefault = () => {
+                if(confirm('确定要重置为默认模板吗？这将覆盖当前的修改。')) {
+                    templateContent.value = DEFAULT_TEMPLATE
                 }
             }
+
+            const generatePreview = async () => {
+                templateTab.value = 'preview'
+                previewContent.value = 'Generating...'
+                try {
+                    // 1. Fetch all active nodes (simulating backend fetch)
+                    // Since we don't have the raw node content in frontend 'items', we use the logic that backend would use:
+                    // But here for preview, we can just check all item's check results if available or we'd need to call backend.
+                    // SIMPLIFIED FOR PREVIEW: We will just list the Node Names to show structure.
+                    // To get real nodes, we would need to fetch '/subscribe' content. 
+                    
+                    // Let's try to fetch the raw subscribe content to be accurate
+                    const res = await fetch(`${window.location.origin}/subscribe`)
+                    const base64 = await res.text()
+                    
+                    // Simple Base64 decode
+                    let decoded = ''
+                    try { decoded = atob(base64.replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, '')) } catch(e){}
+                    
+                    const lines = decoded.split('\n').filter(l => l.trim() !== '')
+                    
+                    // Generate Proxies (Simulated)
+                    let proxiesYaml = ''
+                    const names = []
+                    
+                    lines.forEach(line => {
+                        // Extract name roughly for preview
+                        let name = 'Unknown'
+                        if (line.includes('#')) name = decodeURIComponent(line.split('#')[1])
+                        else if (line.startsWith('vmess://')) {
+                            try {
+                                const c = JSON.parse(atob(line.substring(8).replace(/-/g, '+').replace(/_/g, '/')))
+                                name = c.ps
+                            } catch(e){}
+                        }
+                        names.push(name)
+                        proxiesYaml += `  - { name: "${name}", type: ... }\n`
+                    })
+
+                    // Generate Groups
+                    const groupsYaml = names.map(n => `      - "${n}"`).join('\n')
+
+                    // Replace
+                    let final = templateContent.value
+                        .replace('<BIAOSUB_PROXIES>', proxiesYaml)
+                        .replace('<BIAOSUB_GROUP_ALL>', groupsYaml)
+                    
+                    previewContent.value = final
+
+                } catch(e) {
+                    previewContent.value = 'Preview Failed: ' + e.message
+                }
+            }
+            
+            const copyPreview = () => { copyToClip(previewContent.value) }
 
             const saveTemplate = async () => {
                 templateSaving.value = true
                 try {
-                    const res = await authFetch(`${API_BASE}/template/default`, {
-                        method: 'POST',
-                        body: JSON.stringify({ content: templateContent.value })
-                    })
+                    const res = await authFetch(`${API_BASE}/template/default`, { method: 'POST', body: JSON.stringify({ content: templateContent.value }) })
                     const data = await res.json()
-                    if (data.success) {
-                        showToast('模板保存成功')
-                        showTemplateModal.value = false
-                    } else {
-                        showToast('保存失败', 'error')
-                    }
-                } catch (e) {
-                    showToast('网络错误', 'error')
-                } finally {
-                    templateSaving.value = false
-                }
+                    if (data.success) { showToast('模板保存成功'); showTemplateModal.value = false } 
+                    else { showToast('保存失败', 'error') }
+                } catch (e) { showToast('网络错误', 'error') } finally { templateSaving.value = false }
             }
 
             const openSettings = () => { settingsForm.value = { ...settings.value }; showSettingsModal.value = true }
             const editItem = (i) => openModal(i)
             
-            const getFlagEmoji = (code) => { if(!code) return ''; return String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt())) }
-            const getAlertClass = (item) => { if (!item.info || !item.info.stats) return ''; const percent = item.info.stats.percent; const isExp = isExpired(item.info.stats.raw_expire); if (percent >= 90 || isExp) return 'border-error-custom'; if (percent >= 70) return 'border-warning-custom'; return '' }
-            const getProgressClass = (p) => p >= 90 ? 'progress-error' : (p >= 70 ? 'progress-warning' : 'progress-primary')
-            const getTextColorClass = (p) => p >= 90 ? 'text-red-400 font-bold' : (p >= 70 ? 'text-yellow-400' : 'text-slate-400')
-            const isExpired = (ts) => { if(!ts) return false; return (ts.toString().length===10 ? ts*1000 : ts) < Date.now() }
-            const exportData = () => { const d = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(items.value)); const a = document.createElement('a'); a.href = d; a.download = "biaosub_backup_" + new Date().toISOString().slice(0,10) + ".json"; document.body.appendChild(a); a.click(); a.remove(); showToast('已导出备份') }
-            const importData = async (event) => { const file = event.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = async (e) => { try { const importedItems = JSON.parse(e.target.result); if (!Array.isArray(importedItems)) throw new Error('格式错误'); const res = await authFetch(`${API_BASE}/backup/import`, { method: 'POST', body: JSON.stringify({ items: importedItems }) }); if ((await res.json()).success) { showToast('恢复成功'); fetchItems(); showSettingsModal.value = false } } catch (err) { showToast('导入失败: 文件格式错误', 'error') } }; reader.readAsText(file) }
-            const subCount = computed(() => items.value.filter(i => i.type === 'subscription').length)
-            const nodeCount = computed(() => items.value.filter(i => i.type === 'node').length)
-            const filteredItems = computed(() => items.value.filter(item => { if (filterType.value !== 'all' && item.type !== filterType.value) return false; const term = searchText.value.toLowerCase(); return item.name.toLowerCase().includes(term) || item.url.toLowerCase().includes(term) }))
-            const copyLink = (type) => { const rawSubUrl = `${domain}/subscribe`; let backend = settings.value.sub_converter_url || "https://api.acl4.ssr/sub"; let finalUrl = type === 'v2ray' ? rawSubUrl : `${backend}?target=clash&url=${encodeURIComponent(rawSubUrl)}&insert=false` + (settings.value.sub_converter_token ? `&token=${settings.value.sub_converter_token}` : ''); navigator.clipboard.writeText(finalUrl).then(() => showToast(`已复制 ${type} 链接`)) }
-            const showToast = (m, t='success') => { toast.value={show:true, message:m, type:t}; setTimeout(()=>toast.value.show=false, 3000) }
-
-            onMounted(checkLoginStatus)
-
             return { 
                 isLoggedIn, loginPassword, loginLoading, loginError, handleLogin, logout,
                 items, filteredItems, loading, submitting, subCount, nodeCount, searchText, filterType,
@@ -708,7 +737,8 @@
                 loadNodesForSelection, selectionLoading, selectionNodes, selectAllNodes,
                 cloneItem, formatTime,
                 // Template
-                showTemplateModal, templateContent, openTemplateModal, saveTemplate, templateSaving
+                showTemplateModal, templateContent, openTemplateModal, saveTemplate, templateSaving, 
+                templateTab, previewContent, generatePreview, resetTemplateToDefault, copyPreview
             }
         }
     }).mount('#app')

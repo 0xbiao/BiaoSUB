@@ -51,7 +51,7 @@ const getGeoInfo = async (host) => {
 const parseNodes = (text) => {
   const nodes = []
   
-  // 尝试 Base64 解码
+  // 尝试 Base64 解码 (处理订阅内容)
   let decodedText = text
   try {
     const cleanText = text.replace(/\s/g, '')
@@ -71,7 +71,9 @@ const parseNodes = (text) => {
     if (trimLine.startsWith('vmess://')) {
       try {
         const b64 = trimLine.substring(8)
-        const jsonStr = atob(b64)
+        // 修复：vmess链接可能使用URL safe base64，这里做一个兼容处理
+        const safeB64 = b64.replace(/-/g, '+').replace(/_/g, '/')
+        const jsonStr = atob(safeB64)
         const config = JSON.parse(jsonStr)
         nodes.push({ name: config.ps || 'vmess节点', type: 'vmess', link: trimLine })
       } catch (e) {
@@ -103,7 +105,6 @@ const parseNodes = (text) => {
     const nameRegex = /^\s*-\s*(?:name:|{\s*name:)\s*(.+?)(?:}|)\s*$/gm
     let match
     while ((match = nameRegex.exec(text)) !== null) {
-        // YAML 很难还原原始链接，所以 link 留空，只做展示
         nodes.push({ name: match[1].trim(), type: 'clash', link: '' })
     }
   }
@@ -114,22 +115,22 @@ const parseNodes = (text) => {
 // --- 检测接口 (包含节点详情) ---
 app.post('/check', async (c) => {
   try {
-    const { url, type, needNodes } = await c.req.json() // 增加 needNodes 参数
+    // 关键点：这里必须接收 needNodes 参数
+    const { url, type, needNodes } = await c.req.json() 
     if (!url) return c.json({ success: false, error: '链接为空' })
 
     let resultData = { valid: false, nodeCount: 0, stats: null, location: null, nodes: [] }
 
     // >>> 场景1：自建节点
     if (type === 'node') {
-      // 直接解析
       const nodeList = parseNodes(url)
+      // 即使只有一个节点，也返回 success: true
       if (nodeList.length === 0) return c.json({ success: false, error: '未检测到有效节点' })
       
       resultData.valid = true
       resultData.nodeCount = nodeList.length
       if (needNodes) resultData.nodes = nodeList
 
-      // 获取第一个节点的地理位置
       try {
         const firstLink = nodeList[0].link
         if (firstLink) {
@@ -150,7 +151,7 @@ app.post('/check', async (c) => {
       fetch(url, { headers: { 'User-Agent': 'v2rayNG/1.8.5' } }).catch(e => null)
     ])
     const validRes = clashRes || v2rayRes
-    if (!validRes || !validRes.ok) return c.json({ success: false, error: `连接失败` })
+    if (!validRes || !validRes.ok) return c.json({ success: false, error: `连接失败: ${validRes ? validRes.status : 'Network Error'}` })
 
     // 流量信息
     const infoHeader = (clashRes && clashRes.headers.get('subscription-userinfo')) || (v2rayRes && v2rayRes.headers.get('subscription-userinfo'))
@@ -173,13 +174,14 @@ app.post('/check', async (c) => {
     }
 
     // 解析节点
-    // 优先用 v2ray 的结果解析，因为 Base64 最好解
     const text = (v2rayRes && v2rayRes.ok) ? await v2rayRes.text() : await clashRes.text()
     const nodeList = parseNodes(text)
     
     resultData.valid = true
     resultData.nodeCount = nodeList.length
-    if (needNodes) resultData.nodes = nodeList // 只有前端要求时才返回详情列表
+    
+    // 关键点：如果前端请求了详情，则返回 nodes 数组
+    if (needNodes) resultData.nodes = nodeList 
 
     return c.json({ success: true, data: resultData })
 
@@ -188,7 +190,7 @@ app.post('/check', async (c) => {
   }
 })
 
-// --- 列表 CRUD (保持不变) ---
+// --- 列表 CRUD ---
 app.get('/subs', async (c) => {
   if (!c.env.DB) return c.json({ error: 'DB未绑定' }, 500)
   const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all()

@@ -1,7 +1,6 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
 import { handle } from 'hono/cloudflare-pages'
-import { connect } from 'cloudflare:sockets'
 
 const app = new Hono().basePath('/api')
 
@@ -112,85 +111,9 @@ const parseNodes = (text) => {
   return nodes
 }
 
-// --- 辅助：从链接中提取 Host 和 Port 用于测试 ---
-const parseNodeAddress = (link) => {
-  try {
-    let host = ''
-    let port = 80
-
-    if (link.startsWith('vmess://')) {
-      const b64 = link.substring(8).replace(/-/g, '+').replace(/_/g, '/')
-      const config = JSON.parse(atob(b64))
-      host = config.add
-      port = config.port
-    } else {
-      // 处理 vless://, trojan://, ss:// 等
-      // 通用格式通常是: protocol://user@host:port... 或 protocol://host:port...
-      // 先去掉 protocol://
-      const temp = link.split('://')[1]
-      // 去掉 # 及其后面的部分
-      const cleanLink = temp.split('#')[0]
-      // 去掉 ? 及其后面的部分 (query string)
-      const cleanLinkNoQuery = cleanLink.split('?')[0]
-      
-      // 尝试寻找 @，如果有，取 @ 后面的部分
-      let addressPart = cleanLinkNoQuery
-      if (cleanLinkNoQuery.includes('@')) {
-        addressPart = cleanLinkNoQuery.split('@')[1]
-      }
-      
-      // 此时 addressPart 应该是 host:port
-      // 注意 IPv6 格式 [::1]:80
-      const lastColonIndex = addressPart.lastIndexOf(':')
-      if (lastColonIndex !== -1) {
-        host = addressPart.substring(0, lastColonIndex)
-        // 去掉可能存在的 [] (IPv6)
-        host = host.replace(/^\[|\]$/g, '')
-        port = parseInt(addressPart.substring(lastColonIndex + 1))
-      }
-    }
-
-    if (host && port && !isNaN(port)) {
-      return { host, port }
-    }
-  } catch (e) {
-    console.error('Address parse error:', e)
-  }
-  return null
-}
-
 // --- API 路由 ---
 
-// 1. 节点真机连通性测试 (TCP Ping)
-app.post('/test-node', async (c) => {
-  const { link } = await c.req.json()
-  if (!link) return c.json({ success: false, error: 'No link' })
-
-  const address = parseNodeAddress(link)
-  if (!address) return c.json({ success: false, error: 'Parse failed' })
-
-  try {
-    const start = Date.now()
-    // 使用 Cloudflare Sockets 发起 TCP 连接
-    const socket = connect({ hostname: address.host, port: address.port })
-    const writer = socket.writable.getWriter()
-    
-    // 等待连接建立 (opened 是一个 Promise)
-    await socket.opened
-    
-    const latency = Date.now() - start
-    
-    // 立即关闭连接
-    await writer.close() 
-    // socket.close() 在某些环境可能需要，但在 Workers 中 writer.close() 通常足够
-
-    return c.json({ success: true, latency })
-  } catch (e) {
-    return c.json({ success: false, error: e.message, latency: -1 })
-  }
-})
-
-// 2. 检测链接 / 获取节点列表
+// 1. 检测链接 / 获取节点列表
 app.post('/check', async (c) => {
   try {
     const { url, type, needNodes, ua } = await c.req.json()
@@ -199,32 +122,39 @@ app.post('/check', async (c) => {
     let resultData = { valid: false, nodeCount: 0, stats: null, location: null, nodes: [] }
     const userAgent = ua || 'v2rayNG/1.8.5'
 
-    // 自建节点
+    // >>> 场景1：自建节点
     if (type === 'node') {
       const nodeList = parseNodes(url)
       if (nodeList.length === 0) return c.json({ success: false, error: '未检测到有效节点' })
+      
       resultData.valid = true
       resultData.nodeCount = nodeList.length
       if (needNodes) resultData.nodes = nodeList
+
       try {
         const firstLink = nodeList[0].link
         if (firstLink) {
            const temp = firstLink.split('://')[1]
-           const host = temp.split('@').pop().split(':')[0].split('/')[0].split('?')[0]
+           const atPart = temp.split('@')
+           const addressPart = atPart.length > 1 ? atPart[1] : atPart[0]
+           const host = addressPart.split(':')[0].split('/')[0].split('?')[0]
            if (host) resultData.location = await getGeoInfo(host)
         }
       } catch(e) {}
+
       return c.json({ success: true, data: resultData })
     }
 
-    // 订阅链接
+    // >>> 场景2：机场订阅
     const [clashRes, v2rayRes] = await Promise.all([
       fetchWithRetry(url, { headers: { 'User-Agent': 'Clash/1.0' } }).catch(e => null),
       fetchWithRetry(url, { headers: { 'User-Agent': userAgent } }).catch(e => null)
     ])
+    
     const validRes = clashRes || v2rayRes
     if (!validRes || !validRes.ok) return c.json({ success: false, error: `连接失败` })
 
+    // 解析流量信息
     const infoHeader = (clashRes && clashRes.headers.get('subscription-userinfo')) || (v2rayRes && v2rayRes.headers.get('subscription-userinfo'))
     if (infoHeader) {
       const info = {}
@@ -240,12 +170,13 @@ app.post('/check', async (c) => {
           expire: formatDate(info.expire),
           percent: Math.min(100, Math.round((used / info.total) * 100)),
           raw_expire: info.expire,
-          raw_used: used, // 供前端图表使用
-          raw_total: info.total // 供前端图表使用
+          raw_used: used,
+          raw_total: info.total
         }
       }
     }
 
+    // 解析节点内容
     const text = (v2rayRes && v2rayRes.ok) ? await v2rayRes.text() : await clashRes.text()
     const nodeList = parseNodes(text)
     
@@ -260,7 +191,7 @@ app.post('/check', async (c) => {
   }
 })
 
-// CRUD 接口
+// CRUD 接口 (保持一致)
 app.get('/subs', async (c) => {
   if (!c.env.DB) return c.json({ error: 'DB未绑定' }, 500)
   const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all()

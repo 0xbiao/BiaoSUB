@@ -6,7 +6,7 @@ const app = new Hono().basePath('/api')
 
 app.use('/*', cors())
 
-// --- 鉴权中间件 ---
+// --- 鉴权 ---
 app.use('/*', async (c, next) => {
   if (c.req.path.endsWith('/login')) return await next()
   const authHeader = c.req.header('Authorization')
@@ -21,7 +21,7 @@ app.onError((err, c) => {
   return c.json({ error: err.message }, 500)
 })
 
-// --- 辅助函数：格式化流量 ---
+// --- 工具函数 ---
 const formatBytes = (bytes) => {
   if (!bytes || isNaN(bytes)) return '0 B'
   const k = 1024
@@ -30,127 +30,184 @@ const formatBytes = (bytes) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
 
-// --- 辅助函数：格式化日期 ---
 const formatDate = (timestamp) => {
-  if (!timestamp || isNaN(timestamp)) return '长期有效'
-  // 有些机场返回的是秒，有些是毫秒，做个判断
+  if (!timestamp || isNaN(timestamp)) return '长期'
   const date = new Date(timestamp.toString().length === 10 ? timestamp * 1000 : timestamp)
   return date.toLocaleDateString()
 }
 
-// --- 新增：检测接口 ---
+// 获取 IP 地理位置 (入口IP)
+const getGeoInfo = async (host) => {
+  try {
+    // 如果 host 是域名，ip-api 会自动解析
+    const res = await fetch(`http://ip-api.com/json/${host}?fields=status,country,countryCode,query`)
+    const data = await res.json()
+    if (data.status === 'success') {
+      return { country: data.country, code: data.countryCode, ip: data.query }
+    }
+  } catch (e) {
+    console.error('Geo check failed', e)
+  }
+  return null
+}
+
+// --- 检测接口 (核心升级) ---
 app.post('/check', async (c) => {
   try {
     const { url, type } = await c.req.json()
-    
     if (!url) return c.json({ success: false, error: '链接为空' })
 
-    // 1. 如果是自建节点 (Node)
+    let resultData = {
+      valid: false,
+      nodeCount: 0,
+      stats: null,  // 流量信息
+      location: null // 地理位置
+    }
+
+    // >>> 场景1：自建节点 (单行或多行)
     if (type === 'node') {
-      // 简单的格式校验
-      if (!url.match(/^(vmess|vless|ss|trojan|hysteria|http|https):\/\//)) {
-        return c.json({ success: false, error: '链接协议不支持 (必须是 vmess:// 等)' })
+      const lines = url.split('\n').filter(l => l.trim().length > 0)
+      let validCount = 0
+      let firstHost = ''
+
+      // 支持的协议列表
+      const regex = /^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//
+
+      for (const line of lines) {
+        if (line.match(regex)) {
+          validCount++
+          // 尝试提取域名/IP用于检测位置 (粗略提取)
+          if (!firstHost) {
+            try {
+              const temp = line.split('://')[1]
+              // 针对 user@host:port 或 host:port 格式
+              const atPart = temp.split('@')
+              const addressPart = atPart.length > 1 ? atPart[1] : atPart[0]
+              firstHost = addressPart.split(':')[0].split('/')[0].split('?')[0]
+            } catch(e) {}
+          }
+        }
       }
-      // 注意：CF Worker 无法进行真实的 ICMP Ping，只能做格式检查
-      return c.json({ 
-        success: true, 
-        data: { 
-          valid: true, 
-          message: '链接格式正确 (Worker环境不支持Ping测速)' 
-        } 
-      })
+
+      if (validCount === 0) {
+        return c.json({ success: false, error: '未检测到有效节点链接 (支持 vmess/vless/ss/hysteria2 等)' })
+      }
+
+      resultData.valid = true
+      resultData.nodeCount = validCount
+      
+      // 获取第一个节点的地理位置
+      if (firstHost) {
+        resultData.location = await getGeoInfo(firstHost)
+      }
+      
+      return c.json({ success: true, data: resultData })
     }
 
-    // 2. 如果是机场订阅 (Subscription)
-    // 伪装 User-Agent 防止被屏蔽
-    const res = await fetch(url, {
-      headers: { 'User-Agent': 'Clash/1.0' }
-    })
+    // >>> 场景2：机场订阅
+    const res = await fetch(url, { headers: { 'User-Agent': 'Clash/1.0' } })
+    if (!res.ok) return c.json({ success: false, error: `HTTP ${res.status}` })
 
-    if (!res.ok) {
-      return c.json({ success: false, error: `连接失败: HTTP ${res.status}` })
-    }
-
-    // 解析 Subscription-Userinfo 头
+    // 解析流量头
     const infoHeader = res.headers.get('subscription-userinfo')
-    let stats = null
-    
     if (infoHeader) {
-      // 格式通常为: upload=123; download=456; total=789; expire=123456
       const info = {}
       infoHeader.split(';').forEach(part => {
         const [key, value] = part.trim().split('=')
         if(key && value) info[key] = Number(value)
       })
-      
       if (info.total) {
         const used = (info.upload || 0) + (info.download || 0)
-        stats = {
+        resultData.stats = {
           used: formatBytes(used),
           total: formatBytes(info.total),
           expire: formatDate(info.expire),
-          remaining: formatBytes(info.total - used)
+          percent: Math.min(100, Math.round((used / info.total) * 100))
         }
       }
     }
 
-    // 计算节点数量 (简单统计行数或 vmess:// 出现的次数)
+    // 智能解析节点数
     const text = await res.text()
-    let nodeCount = 0
+    // 尝试 Base64 解码
     try {
-        // 尝试 Base64 解码
-        const decoded = atob(text.replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, ''))
-        nodeCount = decoded.split('\n').filter(line => line.trim().length > 0).length
+      const decoded = atob(text.replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, ''))
+      // 只有包含协议头的行才算节点
+      resultData.nodeCount = decoded.split('\n').filter(line => line.includes('://')).length
     } catch (e) {
-        // 如果解码失败，可能就是明文，直接算行数
-        nodeCount = text.split('\n').filter(line => line.trim().length > 0).length
+      // 可能是 Clash YAML 或明文
+      const lines = text.split('\n')
+      // 简单统计 proxies 数量或行数
+      if (text.includes('proxies:')) {
+        // 粗略估算 yaml 列表项
+        resultData.nodeCount = lines.filter(l => l.trim().startsWith('- name:')).length
+      } else {
+        resultData.nodeCount = lines.filter(line => line.includes('://')).length
+      }
     }
-
-    return c.json({ 
-      success: true, 
-      data: { 
-        valid: true,
-        stats: stats, // 如果没有头信息，这里可能是 null
-        nodeCount: nodeCount
-      } 
-    })
+    
+    resultData.valid = true
+    return c.json({ success: true, data: resultData })
 
   } catch (e) {
     return c.json({ success: false, error: e.message })
   }
 })
 
-// --- 原有 CRUD 接口 (保持不变) ---
+// --- 列表 CRUD (升级 info 字段) ---
+
 app.get('/subs', async (c) => {
   if (!c.env.DB) return c.json({ error: 'DB未绑定' }, 500)
+  // 读取时解析 info JSON
   const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY created_at DESC").all()
-  return c.json({ success: true, data: results })
+  const data = results.map(item => {
+    try {
+      item.info = item.info ? JSON.parse(item.info) : null
+    } catch(e) { item.info = null }
+    return item
+  })
+  return c.json({ success: true, data })
 })
+
 app.post('/subs', async (c) => {
-  const { name, url, type } = await c.req.json()
-  const { success } = await c.env.DB.prepare("INSERT INTO subscriptions (name, url, type) VALUES (?, ?, ?)").bind(name, url, type || 'subscription').run()
+  const { name, url, type, info } = await c.req.json()
+  // 存入前将 info 对象转为 JSON 字符串
+  const infoStr = info ? JSON.stringify(info) : null
+  const { success } = await c.env.DB.prepare(
+    "INSERT INTO subscriptions (name, url, type, info) VALUES (?, ?, ?, ?)"
+  ).bind(name, url, type || 'subscription', infoStr).run()
   return success ? c.json({ success: true }) : c.json({ success: false }, 500)
 })
-app.delete('/subs/:id', async (c) => {
-  const id = c.req.param('id')
-  await c.env.DB.prepare("DELETE FROM subscriptions WHERE id = ?").bind(id).run()
-  return c.json({ success: true })
-})
+
 app.put('/subs/:id', async (c) => {
   const id = c.req.param('id')
   const body = await c.req.json()
-  const { name, url, status, type } = body
+  const { name, url, status, type, info } = body
+  
   let query = "UPDATE subscriptions SET updated_at = CURRENT_TIMESTAMP"
   const params = []
+  
   if (name !== undefined) { query += ", name = ?"; params.push(name); }
   if (url !== undefined) { query += ", url = ?"; params.push(url); }
   if (status !== undefined) { query += ", status = ?"; params.push(status); }
   if (type !== undefined) { query += ", type = ?"; params.push(type); }
+  if (info !== undefined) { 
+    query += ", info = ?"; 
+    params.push(info ? JSON.stringify(info) : null); 
+  }
+
   query += " WHERE id = ?"
   params.push(id)
   await c.env.DB.prepare(query).bind(...params).run()
   return c.json({ success: true })
 })
+
+app.delete('/subs/:id', async (c) => {
+  const id = c.req.param('id')
+  await c.env.DB.prepare("DELETE FROM subscriptions WHERE id = ?").bind(id).run()
+  return c.json({ success: true })
+})
+
 app.get('/settings', async (c) => {
   const { results } = await c.env.DB.prepare("SELECT key, value FROM settings").all()
   const settings = {}

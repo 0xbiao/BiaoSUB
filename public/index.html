@@ -130,8 +130,9 @@
                             </h2>
                             <p class="text-xs text-slate-500 font-mono mt-1 break-all line-clamp-1">{{ item.url }}</p>
                             
-                            <div class="flex gap-2 mt-2" v-if="item.params && item.params.include && item.params.include.length > 0">
-                                <span class="badge badge-xs badge-success badge-outline" title="已启用自选节点"><i class="fa-solid fa-check mr-1"></i> 已选 {{ item.params.include.length }} 个节点</span>
+                            <div class="flex gap-2 mt-2 flex-wrap">
+                                <span v-if="item.params && item.params.include && item.params.include.length > 0" class="badge badge-xs badge-success badge-outline" title="已启用自选节点"><i class="fa-solid fa-check mr-1"></i> 已选 {{ item.params.include.length }} 个</span>
+                                <span v-if="item.params && item.params.ua" class="badge badge-xs badge-info badge-outline" title="自定义UA"><i class="fa-solid fa-user-secret mr-1"></i> UA</span>
                             </div>
 
                             <div v-if="item.info" class="mt-3 bg-slate-900/50 rounded-lg p-2 text-xs text-slate-400 grid grid-cols-2 gap-y-1 gap-x-4">
@@ -194,11 +195,20 @@
                 <div class="collapse collapse-arrow bg-slate-900 border border-slate-700 rounded-box mb-4">
                     <input type="checkbox" /> 
                     <div class="collapse-title text-sm font-medium text-slate-300 flex justify-between items-center pr-10">
-                        <div><i class="fa-solid fa-filter mr-2 text-accent"></i> 自选节点设置</div>
-                        <span v-if="form.params.include.length > 0" class="badge badge-xs badge-primary">已选 {{ form.params.include.length }}</span>
+                        <div><i class="fa-solid fa-sliders mr-2 text-accent"></i> 高级设置 (自选/UA)</div>
+                        <div class="flex gap-2">
+                             <span v-if="form.params.include.length > 0" class="badge badge-xs badge-primary">已选 {{ form.params.include.length }}</span>
+                             <span v-if="form.params.ua" class="badge badge-xs badge-info">UA</span>
+                        </div>
                     </div>
                     <div class="collapse-content pt-2">
-                        <p class="text-xs text-slate-500 mb-3">勾选你需要的节点。如果不勾选任何项，则默认包含该组下的所有节点。</p>
+                        <div class="form-control w-full mb-4" v-if="activeTab === 'subscription'">
+                            <label class="label"><span class="label-text text-xs text-slate-400">自定义 User-Agent (可选)</span></label>
+                            <input type="text" v-model="form.params.ua" placeholder="例如: Clash/1.0 (留空则使用默认)" class="input input-sm input-bordered w-full bg-slate-800 border-slate-600 text-xs font-mono" />
+                        </div>
+
+                        <div class="divider text-xs text-slate-600 my-1">节点筛选</div>
+                        <p class="text-xs text-slate-500 mb-3">勾选你需要的节点。如果不勾选任何项，则默认包含所有节点。</p>
                         
                         <div v-if="selectionLoading" class="flex justify-center py-4"><span class="loading loading-spinner text-primary"></span></div>
                         
@@ -298,11 +308,10 @@
             const items = ref([]); const loading = ref(false); const submitting = ref(false)
             const searchText = ref(''); const filterType = ref('all')
             
-            // 初始化 Form 数据结构，包含 params.include
+            // 初始化 Form 数据结构，包含 params.include 和 params.ua
             const showModal = ref(false); const isEditing = ref(false); const currentId = ref(null); const activeTab = ref('subscription'); 
-            const form = ref({ name: '', url: '', params: { include: [] } }) 
+            const form = ref({ name: '', url: '', params: { include: [], ua: '' } }) 
             
-            // 自选节点相关的状态
             const selectionLoading = ref(false)
             const selectionNodes = ref([])
 
@@ -338,6 +347,7 @@
                             // 确保 params 结构存在
                             if (!i.params) i.params = {}
                             if (!i.params.include) i.params.include = []
+                            if (!i.params.ua) i.params.ua = ''
                             return i
                         }); 
                         nextTick(() => initSortable()) 
@@ -363,16 +373,14 @@
 
             // --- 自选节点加载逻辑 ---
             const loadNodesForSelection = async () => {
-                // 增加对空的校验
                 if (!form.value.url) return showToast('请输入订阅链接或节点内容', 'error')
-                
                 selectionLoading.value = true
                 selectionNodes.value = []
                 try {
-                    // 这里的 type 决定了后端是否去下载。如果是 node，后端会直接解析 url 字段的内容
+                    // 传递 ua 参数
                     const res = await authFetch(`${API_BASE}/check`, { 
                         method: 'POST', 
-                        body: JSON.stringify({ url: form.value.url, type: activeTab.value, needNodes: true }) 
+                        body: JSON.stringify({ url: form.value.url, type: activeTab.value, needNodes: true, ua: form.value.params.ua }) 
                     })
                     const data = await res.json()
                     if (data.success && data.data.nodes) {
@@ -396,7 +404,7 @@
                 try {
                     const res = await authFetch(`${API_BASE}/check`, { 
                         method: 'POST', 
-                        body: JSON.stringify({ url: item.url, type: item.type, needNodes: true }) 
+                        body: JSON.stringify({ url: item.url, type: item.type, needNodes: true, ua: item.params ? item.params.ua : '' }) 
                     })
                     const data = await res.json()
                     if (data.success && data.data.nodes) {
@@ -426,7 +434,7 @@
                 for (const item of subs) {
                     try {
                         item.refreshing = true
-                        const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type }) })
+                        const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type, ua: item.params ? item.params.ua : '' }) })
                         const data = await res.json()
                         if (data.success) {
                             item.info = data.data
@@ -444,8 +452,8 @@
 
             const fetchSettings = async () => { try { const res = await authFetch(`${API_BASE}/settings`); const data = await res.json(); if (data.success && data.data) { settings.value = data.data; settingsForm.value = { ...data.data } } } catch (e) {} }
             const saveSettings = async () => { submitting.value=true; try { await authFetch(`${API_BASE}/settings`, { method: 'POST', body: JSON.stringify(settingsForm.value) }); showToast('设置已保存'); settings.value = { ...settingsForm.value }; showSettingsModal.value = false } catch(e){showToast('失败','error')} finally{submitting.value=false} }
-            const checkUrl = async () => { if (!form.value.url) return showToast('请输入链接', 'error'); checking.value = true; checkResult.value = null; try { const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: form.value.url, type: activeTab.value }) }); const data = await res.json(); if (data.success) { checkResult.value = { success: true, message: '连接成功', ...data.data } } else { checkResult.value = { success: false, message: data.error || '连接失败' } } } catch (e) { checkResult.value = { success: false, message: '请求失败' } } finally { checking.value = false } }
-            const refreshItem = async (item) => { item.refreshing = true; try { const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type }) }); const data = await res.json(); if (data.success) { item.info = data.data; await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({ info: data.data }) }); showToast('刷新成功') } else { showToast(data.error || '刷新失败', 'error') } } catch (e) { showToast('网络错误', 'error') } finally { item.refreshing = false } }
+            const checkUrl = async () => { if (!form.value.url) return showToast('请输入链接', 'error'); checking.value = true; checkResult.value = null; try { const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: form.value.url, type: activeTab.value, ua: form.value.params.ua }) }); const data = await res.json(); if (data.success) { checkResult.value = { success: true, message: '连接成功', ...data.data } } else { checkResult.value = { success: false, message: data.error || '连接失败' } } } catch (e) { checkResult.value = { success: false, message: '请求失败' } } finally { checking.value = false } }
+            const refreshItem = async (item) => { item.refreshing = true; try { const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type, ua: item.params ? item.params.ua : '' }) }); const data = await res.json(); if (data.success) { item.info = data.data; await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({ info: data.data }) }); showToast('刷新成功') } else { showToast(data.error || '刷新失败', 'error') } } catch (e) { showToast('网络错误', 'error') } finally { item.refreshing = false } }
             
             const saveItem = async () => { 
                 if (!form.value.name || !form.value.url) return showToast('请填写完整', 'error'); 
@@ -454,7 +462,6 @@
                     const url = isEditing.value ? `${API_BASE}/subs/${currentId.value}` : `${API_BASE}/subs`; 
                     const method = isEditing.value ? 'PUT' : 'POST'; 
                     const info = checkResult.value && checkResult.value.success ? { stats: checkResult.value.stats, nodeCount: checkResult.value.nodeCount, location: checkResult.value.location } : null; 
-                    // Save form params (include list)
                     const payload = { name: form.value.name, url: form.value.url, type: activeTab.value, info: info, params: form.value.params }; 
                     if ((await (await authFetch(url, { method, body: JSON.stringify(payload) })).json()).success) { 
                         showToast('保存成功'); 
@@ -472,22 +479,22 @@
             
             const openModal = (item) => { 
                 checkResult.value=null; 
-                selectionNodes.value = []; // Clear previous selection nodes list
+                selectionNodes.value = []; 
                 if(item) { 
                     form.value=JSON.parse(JSON.stringify(item)); 
                     if (!form.value.params) form.value.params = {}
                     if (!form.value.params.include) form.value.params.include = []
+                    if (!form.value.params.ua) form.value.params.ua = ''
                     
                     currentId.value=item.id; 
                     activeTab.value=item.type; 
                     isEditing.value=true 
                     
                     if (form.value.params.include.length > 0) {
-                         // 如果有选中的节点，自动加载列表以便用户看到勾选状态
                          loadNodesForSelection()
                     }
                 } else { 
-                    form.value={name:'',url:'', params: { include: [] } }; 
+                    form.value={name:'',url:'', params: { include: [], ua: '' } }; 
                     activeTab.value='subscription'; 
                     isEditing.value=false 
                 } 

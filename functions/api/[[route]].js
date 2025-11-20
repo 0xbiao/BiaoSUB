@@ -36,7 +36,6 @@ const formatDate = (timestamp) => {
   return date.toLocaleDateString()
 }
 
-// 获取 IP 地理位置
 const getGeoInfo = async (host) => {
   try {
     const res = await fetch(`http://ip-api.com/json/${host}?fields=status,country,countryCode,query`)
@@ -48,7 +47,7 @@ const getGeoInfo = async (host) => {
   return null
 }
 
-// --- 检测接口 (修复计数逻辑) ---
+// --- 检测接口 (双重探测版) ---
 app.post('/check', async (c) => {
   try {
     const { url, type } = await c.req.json()
@@ -61,13 +60,12 @@ app.post('/check', async (c) => {
       location: null
     }
 
-    // >>> 场景1：自建节点
+    // >>> 场景1：自建节点 (保持不变)
     if (type === 'node') {
       const lines = url.split('\n').filter(l => l.trim().length > 0)
       const regex = /^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//
       let validCount = 0
       let firstHost = ''
-
       for (const line of lines) {
         if (line.match(regex)) {
           validCount++
@@ -81,28 +79,31 @@ app.post('/check', async (c) => {
           }
         }
       }
-
       if (validCount === 0) return c.json({ success: false, error: '未检测到有效节点链接' })
-      
       resultData.valid = true
       resultData.nodeCount = validCount
       if (firstHost) resultData.location = await getGeoInfo(firstHost)
-      
       return c.json({ success: true, data: resultData })
     }
 
-    // >>> 场景2：机场订阅 (核心修改)
-    // 使用 v2rayNG User-Agent，强制获取 Base64 格式，避免获取到难以解析的 Clash YAML
-    const res = await fetch(url, { 
-      headers: { 
-        'User-Agent': 'v2rayNG/1.8.5' 
-      } 
-    })
+    // >>> 场景2：机场订阅 (双重探测)
+    
+    // 并行发起两个请求：一个伪装 Clash (拿流量信息)，一个伪装 v2rayNG (拿节点列表)
+    const [clashRes, v2rayRes] = await Promise.all([
+      fetch(url, { headers: { 'User-Agent': 'Clash/1.0' } }).catch(e => null),
+      fetch(url, { headers: { 'User-Agent': 'v2rayNG/1.8.5' } }).catch(e => null)
+    ])
 
-    if (!res.ok) return c.json({ success: false, error: `HTTP ${res.status}` })
+    // 1. 优先从 Clash 的响应头里抓取流量信息 (因为它最准)
+    // 如果 Clash 失败，再试 v2ray 的
+    const validRes = clashRes || v2rayRes
+    if (!validRes || !validRes.ok) {
+      return c.json({ success: false, error: `连接失败` })
+    }
 
-    // 解析流量头
-    const infoHeader = res.headers.get('subscription-userinfo')
+    const infoHeader = (clashRes && clashRes.headers.get('subscription-userinfo')) || 
+                       (v2rayRes && v2rayRes.headers.get('subscription-userinfo'))
+    
     if (infoHeader) {
       const info = {}
       infoHeader.split(';').forEach(part => {
@@ -120,39 +121,30 @@ app.post('/check', async (c) => {
       }
     }
 
-    // 解析节点数 (增强版)
-    const text = await res.text()
+    // 2. 优先使用 v2ray 的响应体来计算节点 (因为它返回 Base64，最好算)
+    // 如果 v2ray 请求失败，才退而求其次用 Clash 的
+    const text = (v2rayRes && v2rayRes.ok) ? await v2rayRes.text() : await clashRes.text()
     
     try {
-        // 1. 尝试 Base64 解码 (先去除所有空格和换行，防止解码失败)
+        // 尝试 Base64 解码
         const cleanText = text.replace(/\s/g, '')
         const decoded = atob(cleanText.replace(/-/g, '+').replace(/_/g, '/'))
-        
-        // 2. 解码成功，按行分割并计数
-        // 过滤掉空行，且必须包含协议头 (://) 或者是 ss:// 这种
+        // 过滤有效行
         resultData.nodeCount = decoded.split('\n')
             .map(line => line.trim())
             .filter(line => line && line.match(/^[a-z0-9]+:\/\//i))
             .length
-            
     } catch (e) {
-        // 3. 如果解码失败 (说明可能是明文列表，或者机场强制返回了 YAML)
-        console.log('Base64 decode failed, trying text mode')
-        
-        // 尝试直接按行统计链接
+        // 解码失败，尝试直接匹配
         const linkCount = text.split('\n')
             .filter(line => line.trim().match(/^[a-z0-9]+:\/\//i))
             .length
-            
         if (linkCount > 0) {
             resultData.nodeCount = linkCount
         } else {
-            // 4. 最后尝试匹配 YAML 格式 (以防万一)
-            // 统计 "- name:" 的出现次数
+            // 尝试匹配 YAML (name: xxx)
             const yamlMatches = text.match(/^\s*-\s*(name:|{\s*name:)/gm)
-            if (yamlMatches) {
-                resultData.nodeCount = yamlMatches.length
-            }
+            if (yamlMatches) resultData.nodeCount = yamlMatches.length
         }
     }
     

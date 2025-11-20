@@ -6,7 +6,7 @@ const app = new Hono().basePath('/api')
 
 app.use('/*', cors())
 
-// --- 1. 鉴权中间件 ---
+// 1. 鉴权中间件
 app.use('/*', async (c, next) => {
   if (c.req.path.endsWith('/login')) {
     return await next()
@@ -14,20 +14,20 @@ app.use('/*', async (c, next) => {
   const authHeader = c.req.header('Authorization')
   const correctPassword = c.env.ADMIN_PASSWORD
   if (!correctPassword) {
-    return c.json({ success: false, error: '未设置环境变量 ADMIN_PASSWORD' }, 500)
+    return c.json({ success: false, error: '服务端未设置环境变量 ADMIN_PASSWORD' }, 500)
   }
   if (authHeader !== correctPassword) {
-    return c.json({ success: false, error: '密码错误或未登录' }, 401)
+    return c.json({ success: false, error: '未授权: 密码错误' }, 401)
   }
   await next()
 })
 
 app.onError((err, c) => {
   console.error(`${err}`)
-  return c.json({ error: err.message }, 500)
+  return c.json({ success: false, error: err.message }, 500)
 })
 
-// --- 2. 工具函数 ---
+// 2. 辅助函数
 const formatBytes = (bytes) => {
   if (!bytes || isNaN(bytes)) return '0 B'
   const k = 1024
@@ -49,19 +49,16 @@ const getGeoInfo = async (host) => {
     if (data.status === 'success') {
       return { country: data.country, code: data.countryCode, ip: data.query }
     }
-  } catch (e) {
-    console.error('Geo fetch error', e)
-  }
+  } catch (e) {}
   return null
 }
 
-// --- 3. 核心：清洗引擎 ---
+// 清洗引擎
 const cleanNodes = (nodes, globalParams, localParams) => {
   const applyRules = (nodeList, params) => {
     if (!params) return nodeList
     let list = [...nodeList]
 
-    // 排除 (Exclude)
     if (params.exclude) {
       const excludes = params.exclude.split('\n').filter(k => k.trim())
       if (excludes.length > 0) {
@@ -69,7 +66,6 @@ const cleanNodes = (nodes, globalParams, localParams) => {
       }
     }
 
-    // 包含 (Include)
     if (params.include) {
       const includes = params.include.split('\n').filter(k => k.trim())
       if (includes.length > 0) {
@@ -77,7 +73,6 @@ const cleanNodes = (nodes, globalParams, localParams) => {
       }
     }
 
-    // 重命名 (Rename)
     if (params.rename) {
       const renames = params.rename.split('\n').filter(k => k.trim())
       renames.forEach(rule => {
@@ -100,16 +95,14 @@ const cleanNodes = (nodes, globalParams, localParams) => {
   return result
 }
 
-// --- 4. 核心：节点解析 ---
+// 节点解析
 const parseNodes = (text) => {
   const nodes = []
   let decodedText = text
   try {
     const cleanText = text.replace(/\s/g, '')
     decodedText = atob(cleanText.replace(/-/g, '+').replace(/_/g, '/'))
-  } catch (e) {
-    // 解码失败通常意味着是明文或YAML，保持原样
-  }
+  } catch (e) {}
 
   const lines = decodedText.split('\n')
   const regex = /^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//i
@@ -125,7 +118,7 @@ const parseNodes = (text) => {
         const config = JSON.parse(jsonStr)
         nodes.push({ name: config.ps || 'vmess节点', type: 'vmess', link: trimLine })
       } catch (e) {
-        nodes.push({ name: 'vmess节点(解析失败)', type: 'vmess', link: trimLine })
+        nodes.push({ name: 'vmess节点(error)', type: 'vmess', link: trimLine })
       }
       continue
     }
@@ -135,18 +128,14 @@ const parseNodes = (text) => {
       let name = `${protocol}节点`
       const hashIndex = trimLine.lastIndexOf('#')
       if (hashIndex !== -1) {
-        try {
-          name = decodeURIComponent(trimLine.substring(hashIndex + 1))
-        } catch (e) {
-          name = trimLine.substring(hashIndex + 1)
-        }
+        try { name = decodeURIComponent(trimLine.substring(hashIndex + 1)) } 
+        catch (e) { name = trimLine.substring(hashIndex + 1) }
       }
       nodes.push({ name: name, type: protocol, link: trimLine })
       continue
     }
   }
   
-  // 兼容 Clash YAML 格式的名称提取
   if (nodes.length === 0) {
      const nameRegex = /^\s*-\s*(?:name:|{\s*name:)\s*(.+?)(?:}|)\s*$/gm
      let match
@@ -158,17 +147,16 @@ const parseNodes = (text) => {
   return nodes
 }
 
-// --- 5. 检测接口 (Check) ---
+// 3. 业务接口
+
 app.post('/check', async (c) => {
   try {
-    const body = await c.req.json()
-    const { url, type, needNodes, params } = body
-    
+    const { url, type, needNodes, params } = await c.req.json()
     if (!url) return c.json({ success: false, error: '链接为空' })
 
-    // 获取全局过滤规则
     let globalParams = null
     try {
+        // 容错查询，防止 settings 表不存在报错
         const { results } = await c.env.DB.prepare("SELECT value FROM settings WHERE key = 'filter_config'").all()
         if (results.length > 0 && results[0].value) {
             globalParams = JSON.parse(results[0].value)
@@ -177,13 +165,12 @@ app.post('/check', async (c) => {
 
     let resultData = { valid: false, nodeCount: 0, stats: null, location: null, nodes: [] }
 
-    // 场景1：自建节点
+    // 自建节点
     if (type === 'node') {
       let nodeList = parseNodes(url)
       if (nodeList.length === 0) return c.json({ success: false, error: '未检测到有效节点' })
       
       nodeList = cleanNodes(nodeList, globalParams, params)
-      
       resultData.valid = true
       resultData.nodeCount = nodeList.length
       if (needNodes) resultData.nodes = nodeList
@@ -193,8 +180,7 @@ app.post('/check', async (c) => {
         if (firstLink) {
            const temp = firstLink.split('://')[1]
            const atPart = temp.split('@')
-           const addressPart = atPart.length > 1 ? atPart[1] : atPart[0]
-           const host = addressPart.split(':')[0].split('/')[0].split('?')[0]
+           const host = atPart.length > 1 ? atPart[1].split(':')[0] : atPart[0].split(':')[0]
            if (host) resultData.location = await getGeoInfo(host)
         }
       } catch(e) {}
@@ -202,7 +188,7 @@ app.post('/check', async (c) => {
       return c.json({ success: true, data: resultData })
     }
 
-    // 场景2：机场订阅 (双重探测)
+    // 机场订阅
     const [clashRes, v2rayRes] = await Promise.all([
       fetch(url, { headers: { 'User-Agent': 'Clash/1.0' } }).catch(e => null),
       fetch(url, { headers: { 'User-Agent': 'v2rayNG/1.8.5' } }).catch(e => null)
@@ -213,7 +199,6 @@ app.post('/check', async (c) => {
         return c.json({ success: false, error: `连接失败` })
     }
 
-    // 解析流量
     const infoHeader = (clashRes && clashRes.headers.get('subscription-userinfo')) || (v2rayRes && v2rayRes.headers.get('subscription-userinfo'))
     if (infoHeader) {
       const info = {}
@@ -233,13 +218,10 @@ app.post('/check', async (c) => {
       }
     }
 
-    // 解析节点
     const text = (v2rayRes && v2rayRes.ok) ? await v2rayRes.text() : await clashRes.text()
     let nodeList = parseNodes(text)
-    
-    // 应用清洗
     nodeList = cleanNodes(nodeList, globalParams, params)
-
+    
     resultData.valid = true
     resultData.nodeCount = nodeList.length
     if (needNodes) resultData.nodes = nodeList
@@ -251,31 +233,44 @@ app.post('/check', async (c) => {
   }
 })
 
-// --- 6. 数据库增删改查 ---
-
 app.get('/subs', async (c) => {
   if (!c.env.DB) return c.json({ error: 'DB未绑定' }, 500)
-  const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all()
-  const data = results.map(item => {
-    try { item.info = item.info ? JSON.parse(item.info) : null } catch(e) { item.info = null }
-    try { item.params = item.params ? JSON.parse(item.params) : null } catch(e) { item.params = null }
-    return item
-  })
-  return c.json({ success: true, data })
+  // 关键：如果 sort_order 字段不存在，这里的查询会失败。务必执行 SQL。
+  try {
+    const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all()
+    const data = results.map(item => {
+        try { item.info = item.info ? JSON.parse(item.info) : null } catch(e) { item.info = null }
+        try { item.params = item.params ? JSON.parse(item.params) : null } catch(e) { item.params = null }
+        return item
+    })
+    return c.json({ success: true, data })
+  } catch(e) {
+    // 容错：如果排序字段缺失，降级查询
+    const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY created_at DESC").all()
+    return c.json({ success: true, data: results })
+  }
 })
 
 app.post('/subs', async (c) => {
   const { name, url, type, info, params } = await c.req.json()
   const infoStr = info ? JSON.stringify(info) : null
   const paramsStr = params ? JSON.stringify(params) : null
-  const { success } = await c.env.DB.prepare("INSERT INTO subscriptions (name, url, type, info, params, sort_order) VALUES (?, ?, ?, ?, ?, 0)").bind(name, url, type || 'subscription', infoStr, paramsStr).run()
-  return success ? c.json({ success: true }) : c.json({ success: false }, 500)
+  // 尝试写入 sort_order，如果失败则忽略
+  try {
+      const { success } = await c.env.DB.prepare("INSERT INTO subscriptions (name, url, type, info, params, sort_order) VALUES (?, ?, ?, ?, ?, 0)").bind(name, url, type || 'subscription', infoStr, paramsStr).run()
+      return success ? c.json({ success: true }) : c.json({ success: false }, 500)
+  } catch(e) {
+      // 降级写入
+      const { success } = await c.env.DB.prepare("INSERT INTO subscriptions (name, url, type, info) VALUES (?, ?, ?, ?)").bind(name, url, type || 'subscription', infoStr).run()
+      return success ? c.json({ success: true }) : c.json({ success: false }, 500)
+  }
 })
 
 app.put('/subs/:id', async (c) => {
   const id = c.req.param('id')
   const body = await c.req.json()
   const { name, url, status, type, info, params } = body
+  
   let query = "UPDATE subscriptions SET updated_at = CURRENT_TIMESTAMP"
   const qParams = []
   

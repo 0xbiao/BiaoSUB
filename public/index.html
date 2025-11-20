@@ -77,18 +77,24 @@
                     <div class="stat-value text-secondary">{{ nodeCount }}</div>
                 </div>
                 
-                <div class="glass-panel rounded-2xl shadow-lg p-5 flex flex-col justify-between relative overflow-hidden group h-full pb-6">
-                    <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity"><i class="fa-solid fa-link text-6xl text-emerald-400"></i></div>
-                    <div>
-                        <div class="text-slate-400 text-sm font-bold uppercase tracking-wider">聚合订阅</div>
-                        <div class="text-emerald-400 text-xl font-extrabold mt-1">已就绪</div>
+                <div class="glass-panel rounded-2xl shadow-lg p-6 relative group flex flex-col gap-4 min-h-[160px]">
+                    <div class="absolute inset-0 overflow-hidden rounded-2xl pointer-events-none">
+                        <div class="absolute top-[-10px] right-[-10px] p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                            <i class="fa-solid fa-link text-8xl text-emerald-400"></i>
+                        </div>
                     </div>
-                    <div class="mt-4 flex gap-2 relative z-10">
+                    
+                    <div class="relative z-10">
+                        <div class="text-slate-400 text-sm font-bold uppercase tracking-wider">聚合订阅</div>
+                        <div class="text-emerald-400 text-2xl font-extrabold mt-1">已就绪</div>
+                    </div>
+                    
+                    <div class="mt-auto relative z-20">
                         <div class="dropdown dropdown-top dropdown-end w-full">
-                            <label tabindex="0" class="btn btn-block bg-emerald-500 hover:bg-emerald-600 text-white border-none shadow-md h-10 min-h-0">
+                            <label tabindex="0" class="btn btn-block bg-emerald-500 hover:bg-emerald-600 text-white border-none shadow-md">
                                 <i class="fa-solid fa-share-nodes"></i> 复制订阅链接
                             </label>
-                            <ul tabindex="0" class="dropdown-content z-[50] menu p-2 shadow-2xl bg-slate-800 rounded-box w-72 border border-slate-600 mb-2">
+                            <ul tabindex="0" class="dropdown-content z-[99] menu p-2 shadow-2xl bg-slate-800 rounded-box w-72 border border-slate-600 mb-2">
                                 <li class="menu-title text-slate-400">选择格式</li>
                                 <li><a @click="copyLink('v2ray')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-paper-plane text-blue-400 w-5"></i> v2rayN 订阅</a></li>
                                 <li><a @click="copyLink('clash')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-cat text-orange-400 w-5"></i> Clash 订阅</a></li>
@@ -101,13 +107,13 @@
             </div>
             
             <div class="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div class="glass-panel rounded-2xl shadow-lg p-4 flex flex-col items-center justify-center relative">
+                <div class="glass-panel rounded-2xl shadow-lg p-4 flex flex-col items-center justify-center relative min-h-[250px]">
                      <h3 class="text-slate-400 text-sm font-bold absolute top-4 left-4">总流量池状态</h3>
                      <div class="w-full h-48 flex items-center justify-center">
                          <canvas id="trafficChart"></canvas>
                      </div>
                 </div>
-                <div class="glass-panel rounded-2xl shadow-lg p-4 flex flex-col items-center justify-center relative">
+                <div class="glass-panel rounded-2xl shadow-lg p-4 flex flex-col items-center justify-center relative min-h-[250px]">
                     <h3 class="text-slate-400 text-sm font-bold absolute top-4 left-4">流量使用 Top 5</h3>
                      <div class="w-full h-48 flex items-center justify-center">
                          <canvas id="usageChart"></canvas>
@@ -179,7 +185,7 @@
                     <div class="card-actions justify-between items-center">
                         <button @click="refreshItem(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-accent tooltip tooltip-right" data-tip="刷新" :class="{'loading': item.refreshing}"><i v-if="!item.refreshing" class="fa-solid fa-rotate-right"></i></button>
                         <div class="flex gap-2">
-                            <button @click="previewNodes(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="预览节点"><i class="fa-regular fa-eye"></i></button>
+                            <button @click="previewNodes(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="预览"><i class="fa-regular fa-eye"></i></button>
                             <button @click="showQr(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="二维码"><i class="fa-solid fa-qrcode"></i></button>
                             <button @click="copyToClip(item.url)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="复制"><i class="fa-regular fa-copy"></i></button>
                             <button @click="editItem(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-blue-400"><i class="fa-solid fa-pen"></i></button>

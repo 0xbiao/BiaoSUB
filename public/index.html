@@ -260,7 +260,6 @@
                         <button class="btn btn-sm btn-circle btn-ghost ml-4" @click="showTemplateModal=false">✕</button>
                     </div>
                 </div>
-                
                 <div class="flex-1 overflow-hidden relative">
                     <div v-show="templateTab === 'edit'" class="h-full flex flex-col">
                         <div class="bg-slate-800 p-2 text-xs text-slate-500 flex justify-between items-center border-b border-slate-700">
@@ -271,7 +270,6 @@
                         </div>
                         <textarea v-model="templateContent" class="code-editor w-full h-full bg-[#1e1e1e] text-slate-300 p-4 outline-none resize-none text-sm leading-6" spellcheck="false"></textarea>
                     </div>
-
                     <div v-show="templateTab === 'preview'" class="h-full flex flex-col">
                         <div class="bg-slate-800 p-2 text-xs text-slate-500 border-b border-slate-700 flex justify-between items-center">
                             <span><i class="fa-solid fa-eye"></i> 这是根据当前所有节点生成的最终 YAML 预览</span>
@@ -283,7 +281,6 @@
                         </div>
                     </div>
                 </div>
-                
                 <div class="p-4 bg-slate-900 border-t border-slate-700 flex justify-end gap-2">
                     <button class="btn btn-ghost" @click="showTemplateModal=false">关闭</button>
                     <button v-if="templateTab === 'edit'" class="btn btn-primary" @click="saveTemplate" :disabled="templateSaving">
@@ -310,7 +307,9 @@
                                 <span class="badge badge-sm badge-outline shrink-0 w-16 justify-center">{{ node.type }}</span>
                                 <span class="text-sm text-slate-200 truncate flex-1" :title="node.name">{{ node.name }}</span>
                             </div>
-                            <button v-if="node.link" @click="copyToClip(node.link)" class="btn btn-ghost btn-xs text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity"><i class="fa-regular fa-copy"></i></button>
+                            <button v-if="node.link" @click="copyToClip(node.link)" class="btn btn-ghost btn-xs text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <i class="fa-regular fa-copy"></i>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -659,50 +658,25 @@ rules:
                 templateTab.value = 'preview'
                 previewContent.value = 'Generating...'
                 try {
-                    // 1. Fetch all active nodes (simulating backend fetch)
-                    // Since we don't have the raw node content in frontend 'items', we use the logic that backend would use:
-                    // But here for preview, we can just check all item's check results if available or we'd need to call backend.
-                    // SIMPLIFIED FOR PREVIEW: We will just list the Node Names to show structure.
-                    // To get real nodes, we would need to fetch '/subscribe' content. 
-                    
-                    // Let's try to fetch the raw subscribe content to be accurate
-                    const res = await fetch(`${window.location.origin}/subscribe`)
+                    const res = await fetch(window.location.origin + '/subscribe')
                     const base64 = await res.text()
-                    
-                    // Simple Base64 decode
                     let decoded = ''
                     try { decoded = atob(base64.replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, '')) } catch(e){}
-                    
                     const lines = decoded.split('\n').filter(l => l.trim() !== '')
-                    
-                    // Generate Proxies (Simulated)
                     let proxiesYaml = ''
                     const names = []
-                    
                     lines.forEach(line => {
-                        // Extract name roughly for preview
                         let name = 'Unknown'
                         if (line.includes('#')) name = decodeURIComponent(line.split('#')[1])
                         else if (line.startsWith('vmess://')) {
-                            try {
-                                const c = JSON.parse(atob(line.substring(8).replace(/-/g, '+').replace(/_/g, '/')))
-                                name = c.ps
-                            } catch(e){}
+                            try { const c = JSON.parse(atob(line.substring(8).replace(/-/g, '+').replace(/_/g, '/'))); name = c.ps } catch(e){}
                         }
                         names.push(name)
                         proxiesYaml += `  - { name: "${name}", type: ... }\n`
                     })
-
-                    // Generate Groups
                     const groupsYaml = names.map(n => `      - "${n}"`).join('\n')
-
-                    // Replace
-                    let final = templateContent.value
-                        .replace('<BIAOSUB_PROXIES>', proxiesYaml)
-                        .replace('<BIAOSUB_GROUP_ALL>', groupsYaml)
-                    
+                    let final = templateContent.value.replace('<BIAOSUB_PROXIES>', proxiesYaml).replace('<BIAOSUB_GROUP_ALL>', groupsYaml)
                     previewContent.value = final
-
                 } catch(e) {
                     previewContent.value = 'Preview Failed: ' + e.message
                 }

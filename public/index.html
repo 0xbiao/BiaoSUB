@@ -12,8 +12,10 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
     <script>
+        // 全局错误捕获，方便调试
         window.onerror = function(msg, url, line, col, error) {
-            alert("【面板发生错误】\n" + msg + "\n请截图发给助手排查！");
+            console.error("Global Error:", msg, error);
+            // alert("发生错误，请查看控制台: " + msg); // 调试时可开启
             return false;
         };
     </script>
@@ -52,11 +54,24 @@
         .border-warning-custom { border-color: #fbbf24 !important; border-width: 1px; }
         .border-error-custom { border-color: #ef4444 !important; border-width: 1px; }
 
-        /* 关键修复：强制未打开的模态框不遮挡点击 */
-        dialog:not([open]) {
-            pointer-events: none !important;
-            visibility: hidden !important;
-            display: none !important;
+        /* 修复模态框遮挡问题的正确 CSS */
+        dialog {
+            display: none; /* 默认不显示 */
+        }
+        dialog[open] {
+            display: flex; /* 打开时显示为 flex 布局以居中 */
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            position: fixed;
+            inset: 0;
+            z-index: 999;
+            background-color: rgba(0, 0, 0, 0.5); /* 遮罩背景 */
+            width: 100%;
+            height: 100%;
+            max-width: 100vw;
+            max-height: 100vh;
+            pointer-events: auto; /* 允许点击 */
         }
         
         /* 滚动条美化 */
@@ -89,7 +104,7 @@
 
     <div class="container mx-auto px-4 py-8 max-w-5xl transition-all duration-500" :class="{ 'blur-content': !isLoggedIn }">
         
-        <div class="navbar glass-panel rounded-2xl mb-8 shadow-xl relative z-[100]">
+        <div class="navbar glass-panel rounded-2xl mb-8 shadow-xl relative z-50">
             <div class="flex-1">
                 <a class="btn btn-ghost normal-case text-2xl font-bold bg-gradient-to-r from-primary to-secondary text-transparent bg-clip-text">
                     <i class="fa-solid fa-bolt mr-2 text-yellow-400"></i> BiaoSUB
@@ -122,7 +137,7 @@
                 <div class="stat-value text-secondary">{{ nodeCount }}</div>
             </div>
 
-            <div class="glass-panel rounded-2xl shadow-lg p-6 flex flex-col justify-between relative overflow-hidden group">
+            <div class="glass-panel rounded-2xl shadow-lg p-6 flex flex-col justify-between relative overflow-visible group">
                 <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
                     <i class="fa-solid fa-link text-6xl text-emerald-400"></i>
                 </div>
@@ -130,12 +145,12 @@
                     <div class="text-slate-400 text-sm font-bold uppercase tracking-wider">聚合订阅</div>
                     <div class="text-emerald-400 text-2xl font-extrabold mt-1">已就绪</div>
                 </div>
-                <div class="mt-4 flex gap-2">
+                <div class="mt-4 flex gap-2 relative">
                     <div class="dropdown dropdown-top dropdown-end w-full">
-                        <label tabindex="0" class="btn btn-sm btn-block bg-emerald-500 hover:bg-emerald-600 text-white border-none">
+                        <label tabindex="0" class="btn btn-sm btn-block bg-emerald-500 hover:bg-emerald-600 text-white border-none cursor-pointer">
                             <i class="fa-solid fa-share-nodes"></i> 获取链接
                         </label>
-                        <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow-2xl bg-slate-800 rounded-box w-72 border border-slate-600">
+                        <ul tabindex="0" class="dropdown-content z-[50] menu p-2 shadow-2xl bg-slate-800 rounded-box w-72 border border-slate-600">
                             <li class="menu-title text-slate-400">选择格式</li>
                             <li><a @click="copyLink('v2ray')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-paper-plane text-blue-400 w-5"></i> v2rayN 订阅</a></li>
                             <li><a @click="copyLink('clash')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-cat text-orange-400 w-5"></i> Clash 订阅</a></li>
@@ -253,7 +268,7 @@
             </div>
         </div>
 
-        <dialog class="modal" :class="{ 'modal-open': showModal }">
+        <dialog class="modal" :open="showModal">
             <div class="modal-box bg-slate-800 border border-slate-700">
                 <h3 class="font-bold text-lg text-white mb-4">{{ isEditing ? '编辑资源' : '添加资源' }}</h3>
                 <div class="tabs tabs-boxed bg-slate-900 mb-4">
@@ -313,7 +328,7 @@
             </div>
         </dialog>
 
-        <dialog class="modal" :class="{ 'modal-open': showSettingsModal }">
+        <dialog class="modal" :open="showSettingsModal">
             <div class="modal-box bg-slate-800 border border-slate-700">
                 <h3 class="font-bold text-lg text-white mb-4">全局设置</h3>
                 <div class="tabs tabs-boxed bg-slate-900 mb-4">
@@ -373,7 +388,7 @@
             </div>
         </dialog>
 
-        <dialog class="modal" :class="{ 'modal-open': previewModal.show }">
+        <dialog class="modal" :open="previewModal.show">
             <div class="modal-box bg-slate-800 border border-slate-700 w-11/12 max-w-3xl">
                 <div class="flex justify-between items-center mb-4">
                     <h3 class="font-bold text-lg text-white gap-2 flex items-center">
@@ -410,7 +425,7 @@
             </div>
         </dialog>
 
-        <dialog class="modal" :class="{ 'modal-open': qrModal.show }">
+        <dialog class="modal" :open="qrModal.show">
             <div class="modal-box bg-slate-800 border border-slate-700 text-center">
                 <h3 class="font-bold text-lg text-white mb-4">{{ qrModal.title }}</h3>
                 <div class="bg-white p-4 rounded-xl inline-block">
@@ -420,9 +435,6 @@
                     <button class="btn btn-primary w-full max-w-xs" @click="qrModal.show=false">关闭</button>
                 </div>
             </div>
-            <form method="dialog" class="modal-backdrop">
-                <button @click="qrModal.show=false">close</button>
-            </form>
         </dialog>
 
         <div v-if="toast.show" class="toast toast-bottom toast-end z-50">
@@ -559,12 +571,14 @@
                 try {
                     const res = await authFetch(`${API_BASE}/subs`)
                     const data = await res.json()
-                    if (data.success) {
+                    if (data.success && Array.isArray(data.data)) {
                         items.value = data.data
                         nextTick(() => initSortable())
+                    } else {
+                        items.value = []
                     }
                 } catch (e) {
-                    console.error(e)
+                    items.value = []
                 } finally {
                     loading.value = false
                 }
@@ -580,11 +594,15 @@
                         if (typeof fc === 'string') {
                             try { fc = JSON.parse(fc) } catch(e) { fc = { include:'', exclude:'', rename:'' } }
                         }
-                        settingsForm.value = { ...data.data, filter_config: fc }
+                        settingsForm.value = { 
+                            ...data.data, 
+                            filter_config: fc
+                        }
                     }
                 } catch (e) {}
             }
 
+            // Actions
             const saveSettings = async () => {
                 submitting.value = true
                 try {
@@ -778,47 +796,6 @@
                 }
             }
 
-            const canSort = computed(() => searchText.value === '' && filterType.value === 'all')
-            
-            const initSortable = () => {
-                const el = document.getElementById('sortable-list')
-                if (!el) return
-                if (sortableInstance) sortableInstance.destroy()
-                sortableInstance = new Sortable(el, {
-                    handle: '.drag-handle',
-                    animation: 150,
-                    ghostClass: 'sortable-ghost',
-                    dragClass: 'sortable-drag',
-                    disabled: !canSort.value,
-                    onEnd: async (evt) => {
-                        const item = items.value.splice(evt.oldIndex, 1)[0]
-                        items.value.splice(evt.newIndex, 0, item)
-                        const ids = items.value.map(i => i.id)
-                        try {
-                            await authFetch(`${API_BASE}/sort`, {
-                                method: 'POST',
-                                body: JSON.stringify({ ids })
-                            })
-                        } catch(e) {}
-                    }
-                })
-            }
-            
-            watch([searchText, filterType], () => {
-                if(sortableInstance) sortableInstance.option("disabled", !canSort.value)
-            })
-
-            const copyToClip = (text) => navigator.clipboard.writeText(text).then(() => showToast('已复制'))
-            
-            const showQr = async (item) => {
-                qrModal.value = { show: true, title: item.name, url: item.url }
-                await nextTick()
-                setTimeout(() => {
-                    const c = document.getElementById('qr-canvas')
-                    if(c) new QRious({ element: c, value: item.url, size: 200, level: 'H' })
-                }, 100)
-            }
-
             const deleteItem = async (id) => {
                 if(confirm('确认删除?')) {
                     await authFetch(`${API_BASE}/subs/${id}`, { method: 'DELETE' })
@@ -833,7 +810,7 @@
                     body: JSON.stringify({status: item.status})
                 })
             }
-
+            
             const openSettings = () => {
                 settingsForm.value = JSON.parse(JSON.stringify(settings.value))
                 showSettingsModal.value = true
@@ -870,15 +847,15 @@
                     } catch (err) {
                         showToast('导入失败', 'error')
                     }
+                    // 修复：清空 input value 允许重复导入同名文件
+                    ev.target.value = '' 
                 }
                 r.readAsText(f)
             }
 
-            const getFlagEmoji = (code) => {
-                if(!code) return ''
-                return String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt()))
-            }
-
+            // Styles & UI
+            const getFlagEmoji = (c) => c ? String.fromCodePoint(...c.toUpperCase().split('').map(x=>127397+x.charCodeAt())) : ''
+            
             const isExpired = (ts) => {
                 if(!ts) return false
                 return (ts.toString().length === 10 ? ts * 1000 : ts) < Date.now()
@@ -921,6 +898,46 @@
                 }
                 navigator.clipboard.writeText(finalUrl).then(() => showToast(`已复制 ${type} 链接`))
             }
+            
+            const copyToClip = (text) => navigator.clipboard.writeText(text).then(() => showToast('已复制'))
+            
+            const showQr = async (item) => {
+                qrModal.value = { show: true, title: item.name, url: item.url }
+                await nextTick()
+                setTimeout(() => {
+                    const c = document.getElementById('qr-canvas')
+                    if(c) new QRious({ element: c, value: item.url, size: 200, level: 'H' })
+                }, 100)
+            }
+
+            const canSort = computed(() => searchText.value === '' && filterType.value === 'all')
+            
+            const initSortable = () => {
+                const el = document.getElementById('sortable-list')
+                if (!el) return
+                if (sortableInstance) sortableInstance.destroy()
+                sortableInstance = new Sortable(el, {
+                    handle: '.drag-handle',
+                    animation: 150,
+                    ghostClass: 'sortable-ghost',
+                    dragClass: 'sortable-drag',
+                    disabled: !canSort.value,
+                    onEnd: async (evt) => {
+                        const item = items.value.splice(evt.oldIndex, 1)[0]
+                        items.value.splice(evt.newIndex, 0, item)
+                        const ids = items.value.map(i => i.id)
+                        try {
+                            await authFetch(`${API_BASE}/sort`, {
+                                method: 'POST',
+                                body: JSON.stringify({ ids })
+                            })
+                        } catch(e) {}
+                    }
+                })
+            }
+            watch([searchText, filterType], () => {
+                if(sortableInstance) sortableInstance.option("disabled", !canSort.value)
+            })
 
             onMounted(checkLoginStatus)
 

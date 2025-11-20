@@ -7,11 +7,21 @@
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet" type="text/css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
     <script>
         tailwind.config = {
-            theme: { extend: { colors: { primary: '#6366f1', secondary: '#ec4899', accent: '#1fb2a6' } } }
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#6366f1',
+                        secondary: '#ec4899',
+                        accent: '#1fb2a6',
+                    }
+                }
+            }
         }
     </script>
     <style>
@@ -26,21 +36,33 @@
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
         .blur-content { filter: blur(5px); pointer-events: none; }
-        /* 旗帜字体 */
-        .flag-icon { font-family: "Segoe UI Emoji", "Segoe UI Symbol", "Apple Color Emoji", "Noto Color Emoji", sans-serif; }
+        .flag-icon { font-family: "Segoe UI Emoji", "Apple Color Emoji", sans-serif; }
+        
+        /* 拖拽相关样式 */
+        .sortable-ghost { opacity: 0.4; background: #1e293b; }
+        .sortable-drag { cursor: grabbing; }
+        .cursor-move { cursor: grab; }
+        
+        /* 告警边框 */
+        .border-warning-custom { border-color: #fbbf24 !important; border-width: 1px; }
+        .border-error-custom { border-color: #ef4444 !important; border-width: 1px; }
     </style>
 </head>
 <body class="text-slate-200">
 
 <div id="app">
+    
     <div v-if="!isLoggedIn" class="fixed inset-0 z-[999] flex items-center justify-center bg-slate-900/90 backdrop-blur-sm">
         <div class="card w-96 glass-panel shadow-2xl border border-slate-600">
             <div class="card-body text-center">
-                <div class="mb-4"><i class="fa-solid fa-shield-halved text-5xl text-primary"></i></div>
+                <div class="mb-4">
+                    <i class="fa-solid fa-shield-halved text-5xl text-primary"></i>
+                </div>
                 <h2 class="text-2xl font-bold text-white mb-2">安全验证</h2>
                 <input type="password" v-model="loginPassword" @keyup.enter="handleLogin" placeholder="请输入管理员密码" class="input input-bordered w-full bg-slate-800 text-center focus:border-primary mb-4" />
                 <button @click="handleLogin" class="btn btn-primary w-full" :disabled="loginLoading">
-                    <span v-if="loginLoading" class="loading loading-spinner"></span> {{ loginLoading ? '验证中...' : '解锁面板' }}
+                    <span v-if="loginLoading" class="loading loading-spinner"></span>
+                    {{ loginLoading ? '验证中...' : '解锁面板' }}
                 </button>
                 <p v-if="loginError" class="text-error text-xs mt-3">{{ loginError }}</p>
             </div>
@@ -57,10 +79,14 @@
             </div>
             <div class="flex-none gap-2">
                 <div class="tooltip tooltip-bottom" data-tip="全局设置">
-                    <button @click="openSettings" class="btn btn-circle btn-ghost hover:bg-slate-700"><i class="fa-solid fa-gear text-xl text-slate-400"></i></button>
+                    <button @click="openSettings" class="btn btn-circle btn-ghost hover:bg-slate-700">
+                        <i class="fa-solid fa-gear text-xl text-slate-400"></i>
+                    </button>
                 </div>
                 <div class="tooltip tooltip-bottom" data-tip="退出登录">
-                    <button @click="logout" class="btn btn-circle btn-ghost hover:bg-slate-700 text-red-400"><i class="fa-solid fa-power-off text-xl"></i></button>
+                    <button @click="logout" class="btn btn-circle btn-ghost hover:bg-slate-700 text-red-400">
+                        <i class="fa-solid fa-power-off text-xl"></i>
+                    </button>
                 </div>
                 <div class="w-[1px] h-6 bg-slate-700 mx-2"></div>
                 <button @click="openModal()" class="btn btn-primary btn-sm md:btn-md text-white shadow-lg hover:scale-105 transition-transform">
@@ -75,26 +101,34 @@
                 <div class="stat-title text-slate-400">订阅源</div>
                 <div class="stat-value text-primary">{{ subCount }}</div>
             </div>
+            
             <div class="stat glass-panel rounded-2xl shadow-lg">
                 <div class="stat-figure text-secondary"><i class="fa-solid fa-microchip text-3xl"></i></div>
                 <div class="stat-title text-slate-400">独立节点</div>
                 <div class="stat-value text-secondary">{{ nodeCount }}</div>
             </div>
+
             <div class="glass-panel rounded-2xl shadow-lg p-6 flex flex-col justify-between relative overflow-hidden group">
-                <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity"><i class="fa-solid fa-link text-6xl text-emerald-400"></i></div>
+                <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                    <i class="fa-solid fa-link text-6xl text-emerald-400"></i>
+                </div>
                 <div>
                     <div class="text-slate-400 text-sm font-bold uppercase tracking-wider">聚合订阅</div>
                     <div class="text-emerald-400 text-2xl font-extrabold mt-1">已就绪</div>
                 </div>
                 <div class="mt-4 flex gap-2">
                     <div class="dropdown dropdown-top dropdown-end w-full">
-                        <label tabindex="0" class="btn btn-sm btn-block bg-emerald-500 hover:bg-emerald-600 text-white border-none"><i class="fa-solid fa-share-nodes"></i> 获取链接</label>
+                        <label tabindex="0" class="btn btn-sm btn-block bg-emerald-500 hover:bg-emerald-600 text-white border-none">
+                            <i class="fa-solid fa-share-nodes"></i> 获取链接
+                        </label>
                         <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow-2xl bg-slate-800 rounded-box w-72 border border-slate-600">
                             <li class="menu-title text-slate-400">选择格式</li>
-                            <li><a @click="copyLink('v2ray')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-paper-plane text-blue-400 w-5"></i> 复制 v2rayN 订阅</a></li>
-                            <li><a @click="copyLink('clash')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-cat text-orange-400 w-5"></i> 复制 Clash 订阅</a></li>
+                            <li><a @click="copyLink('v2ray')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-paper-plane text-blue-400 w-5"></i> v2rayN 订阅</a></li>
+                            <li><a @click="copyLink('clash')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-cat text-orange-400 w-5"></i> Clash 订阅</a></li>
                             <div class="divider my-1"></div>
-                            <li class="text-xs text-slate-500 px-4 py-1">转换服务: {{ settings.sub_converter_url ? '自定义' : '默认' }}</li>
+                            <li class="text-xs text-slate-500 px-4 py-1">
+                                转换服务: {{ settings.sub_converter_url ? '自定义' : '默认' }}
+                            </li>
                         </ul>
                     </div>
                 </div>
@@ -102,7 +136,9 @@
         </div>
 
         <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
-            <h2 class="text-xl font-bold text-white flex items-center gap-2"><i class="fa-solid fa-list-ul text-primary"></i> 资源列表</h2>
+            <h2 class="text-xl font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-list-ul text-primary"></i> 资源列表
+            </h2>
             <div class="join w-full md:w-auto">
                 <div class="relative w-full md:w-64">
                     <input type="text" v-model="searchText" placeholder="搜索名称或链接..." class="input input-bordered bg-slate-800 border-slate-600 focus:border-primary w-full join-item pl-10" />
@@ -116,52 +152,79 @@
             </div>
         </div>
 
-        <div v-if="loading" class="flex justify-center py-20"><span class="loading loading-infinity loading-lg text-primary"></span></div>
-        <div v-else class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div v-for="item in filteredItems" :key="item.id" class="card bg-slate-800/50 shadow-xl border border-slate-700 hover:border-primary/50 transition-all duration-300">
+        <div v-if="loading" class="flex justify-center py-20">
+            <span class="loading loading-infinity loading-lg text-primary"></span>
+        </div>
+        
+        <div v-else id="sortable-list" class="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-20">
+            <div v-for="item in filteredItems" :key="item.id" :data-id="item.id" 
+                 class="card bg-slate-800/50 shadow-xl border border-slate-700 hover:border-primary/50 transition-colors duration-300"
+                 :class="getAlertClass(item)">
                 <div class="card-body p-6">
                     <div class="flex justify-between items-start gap-4">
-                        <div class="mt-1">
-                            <div v-if="item.type === 'subscription'" class="w-10 h-10 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-400"><i class="fa-solid fa-rss"></i></div>
-                            <div v-else class="w-10 h-10 rounded-full bg-pink-500/20 flex items-center justify-center text-pink-400"><i class="fa-solid fa-network-wired"></i></div>
+                        <div v-if="canSort" class="mt-2 cursor-move text-slate-600 hover:text-white drag-handle" title="拖拽排序">
+                            <i class="fa-solid fa-grip-vertical text-lg"></i>
                         </div>
+                        
+                        <div class="mt-1">
+                            <div v-if="item.type === 'subscription'" class="w-10 h-10 rounded-full bg-indigo-500/20 flex items-center justify-center text-indigo-400">
+                                <i class="fa-solid fa-rss"></i>
+                            </div>
+                            <div v-else class="w-10 h-10 rounded-full bg-pink-500/20 flex items-center justify-center text-pink-400">
+                                <i class="fa-solid fa-network-wired"></i>
+                            </div>
+                        </div>
+                        
                         <div class="flex-1 min-w-0">
                             <h2 class="card-title text-slate-100 mb-1 text-base items-center">
                                 <span class="truncate">{{ item.name }}</span>
                                 <span :class="item.type==='subscription'?'badge-primary':'badge-secondary'" class="badge badge-xs badge-outline">{{ item.type==='subscription'?'SUB':'NODE' }}</span>
-                                <span v-if="item.info && item.info.location" class="ml-2 text-lg flag-icon" :title="item.info.location.country">{{ getFlagEmoji(item.info.location.code) }}</span>
+                                <span v-if="item.info && item.info.location" class="ml-2 text-lg flag-icon" :title="item.info.location.country">
+                                    {{ getFlagEmoji(item.info.location.code) }}
+                                </span>
                             </h2>
                             <p class="text-xs text-slate-500 font-mono mt-1 break-all line-clamp-1">{{ item.url }}</p>
                             
                             <div v-if="item.info" class="mt-3 bg-slate-900/50 rounded-lg p-2 text-xs text-slate-400 grid grid-cols-2 gap-y-1 gap-x-4">
                                 <template v-if="item.info.stats">
                                     <div class="col-span-2 flex items-center gap-2 mb-1">
-                                        <progress class="progress progress-primary w-full h-1.5" :value="item.info.stats.percent" max="100"></progress>
-                                        <span class="whitespace-nowrap">{{ item.info.stats.percent }}%</span>
+                                        <progress class="progress w-full h-1.5" :class="getProgressClass(item.info.stats.percent)" :value="item.info.stats.percent" max="100"></progress>
+                                        <span class="whitespace-nowrap" :class="getTextColorClass(item.info.stats.percent)">{{ item.info.stats.percent }}%</span>
                                     </div>
                                     <div><i class="fa-solid fa-download mr-1"></i> {{ item.info.stats.used }} / {{ item.info.stats.total }}</div>
-                                    <div><i class="fa-regular fa-clock mr-1"></i> {{ item.info.stats.expire }}</div>
+                                    <div :class="{'text-red-400 font-bold': isExpired(item.info.stats.raw_expire)}">
+                                        <i class="fa-regular fa-clock mr-1"></i> {{ item.info.stats.expire }}
+                                    </div>
                                 </template>
                                 <div class="col-span-2" :class="{'mt-1 pt-1 border-t border-slate-700': item.info.stats}">
                                     <i class="fa-solid fa-list-ol mr-1"></i> 包含节点: <span class="text-white font-bold">{{ item.info.nodeCount || 0 }}</span> 个
                                 </div>
                             </div>
                         </div>
+                        
                         <input type="checkbox" class="toggle toggle-success toggle-sm" :checked="item.status === 1" @change="toggleStatus(item)" />
                     </div>
                     
                     <div class="divider my-2 bg-slate-700/50 h-[1px]"></div>
                     
                     <div class="card-actions justify-between items-center">
-                        <button @click="refreshItem(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-accent tooltip tooltip-right" data-tip="更新信息" :class="{'loading': item.refreshing}">
+                        <button @click="refreshItem(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-accent tooltip tooltip-right" data-tip="刷新" :class="{'loading': item.refreshing}">
                             <i v-if="!item.refreshing" class="fa-solid fa-rotate-right"></i>
                         </button>
 
                         <div class="flex gap-2">
-                            <button @click="showQr(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="二维码"><i class="fa-solid fa-qrcode"></i></button>
-                            <button @click="copyToClip(item.url)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="复制"><i class="fa-regular fa-copy"></i></button>
-                            <button @click="editItem(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-blue-400"><i class="fa-solid fa-pen"></i></button>
-                            <button @click="deleteItem(item.id)" class="btn btn-ghost btn-xs text-slate-400 hover:text-red-500"><i class="fa-regular fa-trash-can"></i></button>
+                            <button @click="showQr(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="二维码">
+                                <i class="fa-solid fa-qrcode"></i>
+                            </button>
+                            <button @click="copyToClip(item.url)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="复制">
+                                <i class="fa-regular fa-copy"></i>
+                            </button>
+                            <button @click="editItem(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-blue-400">
+                                <i class="fa-solid fa-pen"></i>
+                            </button>
+                            <button @click="deleteItem(item.id)" class="btn btn-ghost btn-xs text-slate-400 hover:text-red-500">
+                                <i class="fa-regular fa-trash-can"></i>
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -171,17 +234,22 @@
         <dialog class="modal" :class="{ 'modal-open': showModal }">
             <div class="modal-box bg-slate-800 border border-slate-700">
                 <h3 class="font-bold text-lg text-white mb-4">{{ isEditing ? '编辑资源' : '添加资源' }}</h3>
+                
                 <div v-if="!isEditing" class="tabs tabs-boxed bg-slate-900 mb-4">
                     <a class="tab flex-1" :class="{ 'tab-active bg-indigo-600 text-white': activeTab === 'subscription' }" @click="activeTab = 'subscription'; checkResult=null">订阅</a>
                     <a class="tab flex-1" :class="{ 'tab-active bg-pink-600 text-white': activeTab === 'node' }" @click="activeTab = 'node'; checkResult=null">节点</a>
                 </div>
+                
                 <div class="flex flex-col gap-4">
                     <input type="text" v-model="form.name" placeholder="备注名称" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary" />
+                    
                     <div class="relative">
                         <textarea v-if="activeTab === 'node'" v-model="form.url" placeholder="vmess://...&#10;hysteria2://...&#10;(支持批量导入)" class="textarea textarea-bordered w-full h-32 bg-slate-900 border-slate-600 font-mono text-sm pr-12"></textarea>
                         <input v-else type="text" v-model="form.url" placeholder="https://..." class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary pr-12" />
+                        
                         <button @click="checkUrl" class="absolute right-2 top-2 btn btn-sm btn-square btn-ghost text-accent hover:bg-slate-700 tooltip tooltip-left" data-tip="检测链接" :disabled="checking">
-                            <span v-if="checking" class="loading loading-spinner loading-xs"></span><i v-else class="fa-solid fa-bolt"></i>
+                            <span v-if="checking" class="loading loading-spinner loading-xs"></span>
+                            <i v-else class="fa-solid fa-bolt"></i>
                         </button>
                     </div>
                     
@@ -192,13 +260,13 @@
                                 <span class="font-bold text-sm">{{ checkResult.message }}</span>
                             </div>
                             <div v-if="checkResult.stats" class="grid grid-cols-2 gap-2 text-xs text-slate-400 mt-2 bg-slate-800 p-2 rounded">
-                                <div>已用: <span class="text-white">{{ checkResult.stats.used }}</span></div>
-                                <div>总计: <span class="text-white">{{ checkResult.stats.total }}</span></div>
-                                <div>过期: <span class="text-white">{{ checkResult.stats.expire }}</span></div>
-                                <div>节点: <span class="text-white">{{ checkResult.nodeCount }} 个</span></div>
+                                <div>已用: {{ checkResult.stats.used }}</div>
+                                <div>总计: {{ checkResult.stats.total }}</div>
+                                <div>过期: {{ checkResult.stats.expire }}</div>
+                                <div>节点: {{ checkResult.nodeCount }} 个</div>
                             </div>
                             <div v-else-if="checkResult.success" class="text-xs text-slate-400 ml-6 flex items-center gap-2">
-                                <span>包含节点: {{ checkResult.nodeCount || 0 }} 个</span>
+                                <span>节点: {{ checkResult.nodeCount || 0 }} 个</span>
                                 <span v-if="checkResult.location" class="flex items-center gap-1 bg-slate-800 px-2 py-0.5 rounded">
                                     <span class="flag-icon">{{ getFlagEmoji(checkResult.location.code) }}</span> {{ checkResult.location.country }}
                                 </span>
@@ -206,6 +274,7 @@
                         </div>
                     </div>
                 </div>
+                
                 <div class="modal-action">
                     <button class="btn btn-ghost" @click="showModal=false">取消</button>
                     <button class="btn btn-primary" @click="saveItem" :disabled="submitting">保存</button>
@@ -214,8 +283,11 @@
         </dialog>
 
         <dialog class="modal" :class="{ 'modal-open': showSettingsModal }">
-             <div class="modal-box bg-slate-800 border border-slate-700">
-                <h3 class="font-bold text-lg text-white mb-6 flex items-center"><i class="fa-solid fa-sliders mr-2 text-accent"></i> 全局设置</h3>
+            <div class="modal-box bg-slate-800 border border-slate-700">
+                <h3 class="font-bold text-lg text-white mb-6 flex items-center">
+                    <i class="fa-solid fa-sliders mr-2 text-accent"></i> 全局设置
+                </h3>
+                
                 <div class="flex flex-col gap-5">
                     <div class="form-control w-full">
                         <label class="label"><span class="label-text text-slate-300 font-bold">转换服务地址</span></label>
@@ -229,137 +301,462 @@
                         <label class="label"><span class="label-text text-slate-300 font-bold">User-Agent</span></label>
                         <input type="text" v-model="settingsForm.user_agent" placeholder="v2rayNG/1.8.5" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-accent" />
                     </div>
+                    
+                    <div class="divider text-slate-500 text-xs">数据备份与恢复</div>
+                    
+                    <div class="grid grid-cols-2 gap-4">
+                        <button @click="exportData" class="btn btn-outline btn-info">
+                            <i class="fa-solid fa-download"></i> 导出备份
+                        </button>
+                        <div class="relative">
+                            <button class="btn btn-outline btn-warning w-full">
+                                <i class="fa-solid fa-upload"></i> 导入恢复
+                            </button>
+                            <input type="file" accept=".json" @change="importData" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                        </div>
+                    </div>
                 </div>
+                
                 <div class="modal-action mt-8">
                     <button class="btn btn-ghost" @click="showSettingsModal=false">取消</button>
                     <button class="btn btn-accent text-white" @click="saveSettings" :disabled="submitting">保存设置</button>
                 </div>
             </div>
         </dialog>
-        
+
         <dialog class="modal" :class="{ 'modal-open': qrModal.show }">
             <div class="modal-box bg-slate-800 border border-slate-700 text-center">
                 <h3 class="font-bold text-lg text-white mb-2">{{ qrModal.title }}</h3>
                 <p class="text-xs text-slate-500 mb-6 break-all line-clamp-1">{{ qrModal.url }}</p>
-                <div class="bg-white p-4 rounded-xl inline-block mx-auto"><canvas id="qr-canvas"></canvas></div>
-                <div class="modal-action flex justify-center mt-6"><button class="btn btn-primary w-full max-w-xs" @click="qrModal.show=false">关闭</button></div>
+                
+                <div class="bg-white p-4 rounded-xl inline-block mx-auto">
+                    <canvas id="qr-canvas"></canvas>
+                </div>
+                
+                <div class="modal-action flex justify-center mt-6">
+                    <button class="btn btn-primary w-full max-w-xs" @click="qrModal.show=false">关闭</button>
+                </div>
             </div>
-            <form method="dialog" class="modal-backdrop"><button @click="qrModal.show=false">close</button></form>
+            <form method="dialog" class="modal-backdrop">
+                <button @click="qrModal.show=false">close</button>
+            </form>
         </dialog>
-        <div v-if="toast.show" class="toast toast-bottom toast-end z-50"><div class="alert shadow-lg text-white" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'"><span>{{ toast.message }}</span></div></div>
+
+        <div v-if="toast.show" class="toast toast-bottom toast-end z-50">
+            <div class="alert shadow-lg text-white" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'">
+                <span>{{ toast.message }}</span>
+            </div>
+        </div>
     </div>
 </div>
 
 <script>
-    const { createApp, ref, onMounted, computed, nextTick } = Vue
+    const { createApp, ref, onMounted, computed, nextTick, watch } = Vue
     const API_BASE = '/api'
 
     createApp({
         setup() {
-            // ... 状态定义 ...
-            const isLoggedIn = ref(false); const loginPassword = ref(''); const loginLoading = ref(false); const loginError = ref('')
-            const items = ref([]); const loading = ref(false); const submitting = ref(false)
-            const searchText = ref(''); const filterType = ref('all')
-            const showModal = ref(false); const isEditing = ref(false); const currentId = ref(null); const activeTab = ref('subscription'); const form = ref({ name: '', url: '' })
-            const showSettingsModal = ref(false); const settings = ref({}); const settingsForm = ref({}); const toast = ref({ show: false, message: '', type: 'success' })
-            const domain = window.location.origin; const qrModal = ref({ show: false, title: '', url: '' })
-            const checking = ref(false); const checkResult = ref(null)
+            // --- 状态定义 ---
+            const isLoggedIn = ref(false)
+            const loginPassword = ref('')
+            const loginLoading = ref(false)
+            const loginError = ref('')
+            
+            const items = ref([])
+            const loading = ref(false)
+            const submitting = ref(false)
+            
+            // 搜索与过滤
+            const searchText = ref('')
+            const filterType = ref('all')
 
+            // UI 控制
+            const showModal = ref(false)
+            const isEditing = ref(false)
+            const currentId = ref(null)
+            const activeTab = ref('subscription')
+            const form = ref({ name: '', url: '' })
+            
+            const showSettingsModal = ref(false)
+            const settings = ref({})
+            const settingsForm = ref({})
+            
+            const toast = ref({ show: false, message: '', type: 'success' })
+            const domain = window.location.origin
+            
+            const qrModal = ref({ show: false, title: '', url: '' })
+            const checking = ref(false)
+            const checkResult = ref(null)
+            
+            let sortableInstance = null
+
+            // --- API 封装 ---
             const authFetch = async (url, options = {}) => {
                 const token = localStorage.getItem('biaosub_token')
-                options.headers = { 'Content-Type': 'application/json', 'Authorization': token || '', ...options.headers }
+                const headers = { 'Content-Type': 'application/json', 'Authorization': token || '' }
+                options.headers = { ...headers, ...options.headers }
                 const res = await fetch(url, options)
-                if (res.status === 401) { logout(); throw new Error('未授权'); }
+                if (res.status === 401) {
+                    logout()
+                    throw new Error('未授权或密码错误')
+                }
                 return res
             }
 
-            // ... Login, Logout, CRUD ...
+            // --- 登录/登出 ---
             const handleLogin = async () => {
                 if (!loginPassword.value) return
-                loginLoading.value = true; loginError.value = ''
+                loginLoading.value = true
+                loginError.value = ''
                 try {
-                    const res = await fetch(`${API_BASE}/login`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({password: loginPassword.value}) })
+                    const res = await fetch(`${API_BASE}/login`, {
+                        method: 'POST',
+                        headers: {'Content-Type':'application/json'},
+                        body: JSON.stringify({password: loginPassword.value})
+                    })
                     const data = await res.json()
-                    if (data.success) { localStorage.setItem('biaosub_token', loginPassword.value); isLoggedIn.value = true; loginPassword.value = ''; showToast('欢迎回来'); initData() } 
-                    else { loginError.value = data.error }
-                } catch (e) { loginError.value = '网络连接失败' } finally { loginLoading.value = false }
+                    if (data.success) {
+                        localStorage.setItem('biaosub_token', loginPassword.value)
+                        isLoggedIn.value = true
+                        loginPassword.value = ''
+                        showToast('欢迎回来')
+                        initData()
+                    } else {
+                        loginError.value = data.error || '密码错误'
+                    }
+                } catch (e) {
+                    loginError.value = '网络连接失败'
+                } finally {
+                    loginLoading.value = false
+                }
             }
-            const logout = () => { localStorage.removeItem('biaosub_token'); isLoggedIn.value = false; items.value = [] }
-            const checkLoginStatus = () => { if (localStorage.getItem('biaosub_token')) { isLoggedIn.value = true; initData() } }
-            const initData = () => { fetchItems(); fetchSettings() }
-            const fetchItems = async () => { loading.value = true; try { const res = await authFetch(`${API_BASE}/subs`); const data = await res.json(); if (data.success) items.value = data.data } catch (e) { console.error(e) } finally { loading.value = false } }
-            const fetchSettings = async () => { try { const res = await authFetch(`${API_BASE}/settings`); const data = await res.json(); if (data.success && data.data) { settings.value = data.data; settingsForm.value = { ...data.data } } } catch (e) {} }
 
-            // 国旗转换
-            const getFlagEmoji = (countryCode) => {
-                if (!countryCode) return ''
-                const codePoints = countryCode.toUpperCase().split('').map(char => 127397 + char.charCodeAt());
-                return String.fromCodePoint(...codePoints);
+            const logout = () => {
+                localStorage.removeItem('biaosub_token')
+                isLoggedIn.value = false
+                items.value = []
+            }
+
+            const checkLoginStatus = () => {
+                const token = localStorage.getItem('biaosub_token')
+                if (token) {
+                    isLoggedIn.value = true
+                    initData()
+                }
+            }
+
+            // --- 数据初始化 ---
+            const initData = () => {
+                fetchItems()
+                fetchSettings()
+            }
+
+            const fetchItems = async () => {
+                loading.value = true
+                try {
+                    const res = await authFetch(`${API_BASE}/subs`)
+                    const data = await res.json()
+                    if (data.success) {
+                        items.value = data.data
+                        nextTick(() => initSortable())
+                    }
+                } catch (e) {
+                    console.error(e)
+                } finally {
+                    loading.value = false
+                }
+            }
+
+            const fetchSettings = async () => {
+                try {
+                    const res = await authFetch(`${API_BASE}/settings`)
+                    const data = await res.json()
+                    if (data.success && data.data) {
+                        settings.value = data.data
+                        settingsForm.value = { ...data.data }
+                    }
+                } catch (e) {}
+            }
+
+            // --- 拖拽排序 ---
+            const canSort = computed(() => searchText.value === '' && filterType.value === 'all')
+            
+            const initSortable = () => {
+                const el = document.getElementById('sortable-list')
+                if (!el) return
+                if (sortableInstance) sortableInstance.destroy()
+                
+                sortableInstance = new Sortable(el, {
+                    handle: '.drag-handle',
+                    animation: 150,
+                    ghostClass: 'sortable-ghost',
+                    dragClass: 'sortable-drag',
+                    disabled: !canSort.value,
+                    onEnd: async (evt) => {
+                        // 更新本地数组
+                        const item = items.value.splice(evt.oldIndex, 1)[0]
+                        items.value.splice(evt.newIndex, 0, item)
+                        
+                        // 提交后端保存顺序
+                        const ids = items.value.map(i => i.id)
+                        try {
+                            await authFetch(`${API_BASE}/sort`, {
+                                method: 'POST',
+                                body: JSON.stringify({ ids })
+                            })
+                        } catch(e) {
+                            showToast('排序保存失败', 'error')
+                        }
+                    }
+                })
+            }
+
+            watch([searchText, filterType], () => {
+                if(sortableInstance) sortableInstance.option("disabled", !canSort.value)
+            })
+
+            // --- 核心功能函数 ---
+
+            // 链接检测
+            const checkUrl = async () => {
+                if (!form.value.url) return showToast('请输入链接', 'error')
+                checking.value = true
+                checkResult.value = null
+                try {
+                    const res = await authFetch(`${API_BASE}/check`, {
+                        method: 'POST',
+                        body: JSON.stringify({ url: form.value.url, type: activeTab.value })
+                    })
+                    const data = await res.json()
+                    if (data.success) {
+                        checkResult.value = { success: true, message: '连接成功', ...data.data }
+                    } else {
+                        checkResult.value = { success: false, message: data.error || '连接失败' }
+                    }
+                } catch (e) {
+                    checkResult.value = { success: false, message: '请求失败' }
+                } finally {
+                    checking.value = false
+                }
             }
 
             // 刷新单项
             const refreshItem = async (item) => {
                 item.refreshing = true
                 try {
-                    const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type }) })
+                    const res = await authFetch(`${API_BASE}/check`, {
+                        method: 'POST',
+                        body: JSON.stringify({ url: item.url, type: item.type })
+                    })
                     const data = await res.json()
                     if (data.success) {
-                        // 更新本地视图
                         item.info = data.data
-                        // 保存到数据库
-                        await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({ info: data.data }) })
+                        await authFetch(`${API_BASE}/subs/${item.id}`, {
+                            method: 'PUT',
+                            body: JSON.stringify({ info: data.data })
+                        })
                         showToast('刷新成功')
                     } else {
                         showToast(data.error || '刷新失败', 'error')
                     }
-                } catch (e) { showToast('网络错误', 'error') } 
-                finally { item.refreshing = false }
+                } catch (e) {
+                    showToast('网络错误', 'error')
+                } finally {
+                    item.refreshing = false
+                }
             }
 
-            // 检测 URL
-            const checkUrl = async () => {
-                if (!form.value.url) return showToast('请输入链接', 'error')
-                checking.value = true; checkResult.value = null
-                try {
-                    const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: form.value.url, type: activeTab.value }) })
-                    const data = await res.json()
-                    if (data.success) { checkResult.value = { success: true, message: '连接成功', ...data.data } } 
-                    else { checkResult.value = { success: false, message: data.error || '连接失败' } }
-                } catch (e) { checkResult.value = { success: false, message: '请求失败' } } 
-                finally { checking.value = false }
-            }
-
+            // 保存资源
             const saveItem = async () => {
                 if (!form.value.name || !form.value.url) return showToast('请填写完整', 'error')
                 submitting.value = true
                 try {
                     const url = isEditing.value ? `${API_BASE}/subs/${currentId.value}` : `${API_BASE}/subs`
                     const method = isEditing.value ? 'PUT' : 'POST'
-                    // 如果 checkResult 有数据，一起保存进去
+                    
+                    // 如果有检测结果，带上 info
                     const info = checkResult.value && checkResult.value.success ? { 
                         stats: checkResult.value.stats, 
                         nodeCount: checkResult.value.nodeCount,
                         location: checkResult.value.location
                     } : null
-                    const payload = { name: form.value.name, url: form.value.url, type: activeTab.value, info: info }
-                    if ((await (await authFetch(url, { method, body: JSON.stringify(payload) })).json()).success) { showToast('保存成功'); fetchItems(); showModal.value=false; }
-                } catch (e) { showToast('保存失败', 'error') } finally { submitting.value = false }
+                    
+                    const payload = { 
+                        name: form.value.name, 
+                        url: form.value.url, 
+                        type: activeTab.value, 
+                        info: info 
+                    }
+                    
+                    const res = await authFetch(url, { method, body: JSON.stringify(payload) })
+                    if ((await res.json()).success) {
+                        showToast('保存成功')
+                        fetchItems()
+                        showModal.value = false
+                    }
+                } catch (e) {
+                    showToast('保存失败', 'error')
+                } finally {
+                    submitting.value = false
+                }
             }
 
-            // ... 其他通用函数 (delete, toggle, qr, copy, settings) ...
-            const deleteItem = async (id) => { if(confirm('确认删除?')) { await authFetch(`${API_BASE}/subs/${id}`, { method: 'DELETE' }); fetchItems(); } }
-            const toggleStatus = async (item) => { item.status = item.status === 1 ? 0 : 1; await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({status: item.status}) }) }
-            const copyToClip = (text) => navigator.clipboard.writeText(text).then(() => showToast('已复制'))
-            const showQr = async (item) => { qrModal.value = { show: true, title: item.name, url: item.url }; await nextTick(); setTimeout(() => { const c = document.getElementById('qr-canvas'); if(c) new QRious({ element: c, value: item.url, size: 200, level: 'H' }) }, 100) }
-            const openModal = (item) => { checkResult.value=null; if(item) { form.value={...item}; currentId.value=item.id; activeTab.value=item.type; isEditing.value=true } else { form.value={name:'',url:''}; activeTab.value='subscription'; isEditing.value=false } showModal.value=true }
-            const openSettings = () => { settingsForm.value = { ...settings.value }; showSettingsModal.value = true }
-            const saveSettings = async () => { submitting.value=true; try { await authFetch(`${API_BASE}/settings`, { method: 'POST', body: JSON.stringify(settingsForm.value) }); showToast('设置已保存'); settings.value = { ...settingsForm.value }; showSettingsModal.value = false } catch(e){showToast('失败','error')} finally{submitting.value=false} }
-            const showToast = (m, t='success') => { toast.value={show:true, message:m, type:t}; setTimeout(()=>toast.value.show=false, 3000) }
+            // 保存设置
+            const saveSettings = async () => {
+                submitting.value = true
+                try {
+                    await authFetch(`${API_BASE}/settings`, {
+                        method: 'POST',
+                        body: JSON.stringify(settingsForm.value)
+                    })
+                    showToast('设置已保存')
+                    settings.value = { ...settingsForm.value }
+                    showSettingsModal.value = false
+                } catch (e) {
+                    showToast('保存失败', 'error')
+                } finally {
+                    submitting.value = false
+                }
+            }
+
+            // 备份导出
+            const exportData = () => {
+                const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(items.value))
+                const downloadAnchorNode = document.createElement('a')
+                downloadAnchorNode.setAttribute("href", dataStr)
+                downloadAnchorNode.setAttribute("download", "biaosub_backup_" + new Date().toISOString().slice(0,10) + ".json")
+                document.body.appendChild(downloadAnchorNode)
+                downloadAnchorNode.click()
+                downloadAnchorNode.remove()
+                showToast('已导出备份')
+            }
+
+            // 备份恢复
+            const importData = async (event) => {
+                const file = event.target.files[0]
+                if (!file) return
+                const reader = new FileReader()
+                reader.onload = async (e) => {
+                    try {
+                        const importedItems = JSON.parse(e.target.result)
+                        if (!Array.isArray(importedItems)) throw new Error('格式错误')
+                        const res = await authFetch(`${API_BASE}/backup/import`, {
+                            method: 'POST',
+                            body: JSON.stringify({ items: importedItems })
+                        })
+                        if ((await res.json()).success) {
+                            showToast('恢复成功')
+                            fetchItems()
+                            showSettingsModal.value = false
+                        }
+                    } catch (err) {
+                        showToast('导入失败: 文件格式错误', 'error')
+                    }
+                }
+                reader.readAsText(file)
+            }
+
+            // --- 辅助函数 ---
+            const deleteItem = async (id) => {
+                if(confirm('确认删除?')) {
+                    await authFetch(`${API_BASE}/subs/${id}`, { method: 'DELETE' })
+                    fetchItems()
+                }
+            }
+
+            const toggleStatus = async (item) => {
+                item.status = item.status === 1 ? 0 : 1
+                await authFetch(`${API_BASE}/subs/${item.id}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({status: item.status})
+                })
+            }
+
+            const openModal = (item) => {
+                checkResult.value = null
+                if (item) {
+                    form.value = { ...item }
+                    currentId.value = item.id
+                    activeTab.value = item.type
+                    isEditing.value = true
+                } else {
+                    form.value = { name: '', url: '' }
+                    activeTab.value = 'subscription'
+                    isEditing.value = false
+                }
+                showModal.value = true
+            }
+
+            const showQr = async (item) => {
+                qrModal.value = { show: true, title: item.name, url: item.url }
+                await nextTick()
+                setTimeout(() => {
+                    const c = document.getElementById('qr-canvas')
+                    if(c) new QRious({ element: c, value: item.url, size: 200, level: 'H' })
+                }, 100)
+            }
+
+            const copyToClip = (text) => {
+                navigator.clipboard.writeText(text).then(() => showToast('已复制'))
+            }
+
+            const copyLink = (type) => {
+                const rawSubUrl = `${domain}/subscribe`
+                let backend = settings.value.sub_converter_url || "https://api.acl4.ssr/sub"
+                let finalUrl = ""
+                if (type === 'v2ray') {
+                    finalUrl = rawSubUrl
+                } else if (type === 'clash') {
+                    finalUrl = `${backend}?target=clash&url=${encodeURIComponent(rawSubUrl)}&insert=false`
+                    if (settings.value.sub_converter_token) {
+                        finalUrl += `&token=${settings.value.sub_converter_token}`
+                    }
+                }
+                navigator.clipboard.writeText(finalUrl).then(() => showToast(`已复制 ${type} 链接`))
+            }
+
+            // 样式辅助
+            const getFlagEmoji = (code) => {
+                if(!code) return ''
+                return String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt()))
+            }
+            
+            const getAlertClass = (item) => {
+                if (!item.info || !item.info.stats) return ''
+                const percent = item.info.stats.percent
+                const isExp = isExpired(item.info.stats.raw_expire)
+                if (percent >= 90 || isExp) return 'border-error-custom'
+                if (percent >= 70) return 'border-warning-custom'
+                return ''
+            }
+            const getProgressClass = (p) => p >= 90 ? 'progress-error' : (p >= 70 ? 'progress-warning' : 'progress-primary')
+            const getTextColorClass = (p) => p >= 90 ? 'text-red-400 font-bold' : (p >= 70 ? 'text-yellow-400' : 'text-slate-400')
+            const isExpired = (ts) => {
+                if(!ts) return false
+                return (ts.toString().length===10 ? ts*1000 : ts) < Date.now()
+            }
+
+            const showToast = (m, t='success') => {
+                toast.value = { show: true, message: m, type: t }
+                setTimeout(() => toast.value.show = false, 3000)
+            }
+            
+            // 简写辅助
             const editItem = (i) => openModal(i)
+            const openSettings = () => {
+                settingsForm.value = { ...settings.value }
+                showSettingsModal.value = true
+            }
             const subCount = computed(() => items.value.filter(i => i.type === 'subscription').length)
             const nodeCount = computed(() => items.value.filter(i => i.type === 'node').length)
-            const filteredItems = computed(() => items.value.filter(item => { if (filterType.value !== 'all' && item.type !== filterType.value) return false; const term = searchText.value.toLowerCase(); return item.name.toLowerCase().includes(term) || item.url.toLowerCase().includes(term) }))
-            const copyLink = (type) => { const rawSubUrl = `${domain}/subscribe`; let backend = settings.value.sub_converter_url || "https://api.acl4.ssr/sub"; let finalUrl = type === 'v2ray' ? rawSubUrl : `${backend}?target=clash&url=${encodeURIComponent(rawSubUrl)}&insert=false` + (settings.value.sub_converter_token ? `&token=${settings.value.sub_converter_token}` : ''); navigator.clipboard.writeText(finalUrl).then(() => showToast(`已复制 ${type} 链接`)) }
+            
+            const filteredItems = computed(() => {
+                return items.value.filter(item => {
+                    if (filterType.value !== 'all' && item.type !== filterType.value) return false
+                    const term = searchText.value.toLowerCase()
+                    return item.name.toLowerCase().includes(term) || item.url.toLowerCase().includes(term)
+                })
+            })
 
             onMounted(checkLoginStatus)
 
@@ -368,7 +765,8 @@
                 items, filteredItems, loading, submitting, subCount, nodeCount, searchText, filterType,
                 showModal, isEditing, activeTab, form, showSettingsModal, settingsForm, settings, qrModal,
                 saveItem, deleteItem, toggleStatus, openModal, editItem, openSettings, saveSettings, showQr,
-                toast, copyLink, copyToClip, checkUrl, checking, checkResult, refreshItem, getFlagEmoji
+                toast, copyLink, copyToClip, checkUrl, checking, checkResult, refreshItem, getFlagEmoji,
+                exportData, importData, canSort, getAlertClass, getProgressClass, getTextColorClass, isExpired
             }
         }
     }).mount('#app')

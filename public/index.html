@@ -57,6 +57,8 @@
                 </a>
             </div>
             <div class="flex-none gap-2">
+                <button @click="openTemplateModal" class="btn btn-circle btn-ghost hover:bg-slate-700 tooltip tooltip-bottom" data-tip="配置模板"><i class="fa-solid fa-file-code text-xl text-slate-400"></i></button>
+                
                 <button @click="openSettings" class="btn btn-circle btn-ghost hover:bg-slate-700 tooltip tooltip-bottom" data-tip="全局设置"><i class="fa-solid fa-gear text-xl text-slate-400"></i></button>
                 <button @click="logout" class="btn btn-circle btn-ghost hover:bg-slate-700 text-red-400 tooltip tooltip-bottom" data-tip="退出"><i class="fa-solid fa-power-off text-xl"></i></button>
                 <div class="w-[1px] h-6 bg-slate-700 mx-2"></div>
@@ -222,7 +224,7 @@
                     </div>
                 </div>
 
-                <div class="collapse collapse-arrow bg-slate-900 border border-slate-700 rounded-box mb-4">
+                 <div class="collapse collapse-arrow bg-slate-900 border border-slate-700 rounded-box mb-4">
                     <input type="checkbox" /> 
                     <div class="collapse-title text-sm font-medium text-slate-300 flex justify-between items-center pr-10">
                         <div><i class="fa-solid fa-sliders mr-2 text-accent"></i> 高级设置 (自选/UA)</div>
@@ -263,6 +265,34 @@
                 </div>
 
                 <div class="modal-action"><button class="btn btn-ghost" @click="showModal=false">取消</button><button class="btn btn-primary" @click="saveItem" :disabled="submitting">保存</button></div>
+            </div>
+        </dialog>
+
+        <dialog class="modal" :class="{ 'modal-open': showTemplateModal }">
+            <div class="modal-box bg-slate-800 border border-slate-700 w-11/12 max-w-5xl h-5/6 flex flex-col">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="font-bold text-lg text-white flex items-center gap-2">
+                        <i class="fa-solid fa-file-code text-primary"></i> 默认配置模板 (YAML)
+                    </h3>
+                    <button class="btn btn-sm btn-circle btn-ghost" @click="showTemplateModal=false">✕</button>
+                </div>
+                
+                <div class="flex-1 relative">
+                    <textarea v-model="templateContent" class="textarea textarea-bordered w-full h-full bg-slate-900 font-mono text-sm leading-relaxed" placeholder="Loading..."></textarea>
+                </div>
+                
+                <div class="modal-action flex justify-between items-center mt-4">
+                    <div class="text-xs text-slate-500">
+                        占位符: <code class="bg-slate-700 px-1 rounded text-warning">&lt;BIAOSUB_PROXIES&gt;</code> (节点), <code class="bg-slate-700 px-1 rounded text-warning">&lt;BIAOSUB_GROUP_ALL&gt;</code> (组名)
+                    </div>
+                    <div class="flex gap-2">
+                        <button class="btn btn-ghost" @click="showTemplateModal=false">取消</button>
+                        <button class="btn btn-primary" @click="saveTemplate" :disabled="templateSaving">
+                            <span v-if="templateSaving" class="loading loading-spinner loading-xs"></span>
+                            保存模板
+                        </button>
+                    </div>
+                </div>
             </div>
         </dialog>
 
@@ -354,6 +384,11 @@
             const refreshingAll = ref(false)
             const previewModal = ref({ show: false, nodes: [] })
             const previewLoading = ref(false)
+
+            // Template Vars
+            const showTemplateModal = ref(false)
+            const templateContent = ref('')
+            const templateSaving = ref(false)
 
             // Charts
             let trafficChartInstance = null
@@ -605,6 +640,44 @@
                 showModal.value=true 
             }
 
+            // Template Logic
+            const openTemplateModal = async () => {
+                showTemplateModal.value = true
+                templateContent.value = 'Loading...'
+                try {
+                    const res = await authFetch(`${API_BASE}/template/default`)
+                    const data = await res.json()
+                    if (data.success) {
+                        templateContent.value = data.data
+                    } else {
+                        templateContent.value = '获取模板失败或暂无默认模板'
+                    }
+                } catch (e) {
+                    templateContent.value = '网络错误'
+                }
+            }
+
+            const saveTemplate = async () => {
+                templateSaving.value = true
+                try {
+                    const res = await authFetch(`${API_BASE}/template/default`, {
+                        method: 'POST',
+                        body: JSON.stringify({ content: templateContent.value })
+                    })
+                    const data = await res.json()
+                    if (data.success) {
+                        showToast('模板保存成功')
+                        showTemplateModal.value = false
+                    } else {
+                        showToast('保存失败', 'error')
+                    }
+                } catch (e) {
+                    showToast('网络错误', 'error')
+                } finally {
+                    templateSaving.value = false
+                }
+            }
+
             const openSettings = () => { settingsForm.value = { ...settings.value }; showSettingsModal.value = true }
             const editItem = (i) => openModal(i)
             
@@ -633,7 +706,9 @@
                 previewNodes, previewModal, previewLoading, copyAllNodes,
                 refreshAll, refreshingAll,
                 loadNodesForSelection, selectionLoading, selectionNodes, selectAllNodes,
-                cloneItem, formatTime
+                cloneItem, formatTime,
+                // Template
+                showTemplateModal, templateContent, openTemplateModal, saveTemplate, templateSaving
             }
         }
     }).mount('#app')

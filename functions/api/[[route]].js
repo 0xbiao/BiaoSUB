@@ -50,15 +50,11 @@ const getGeoInfo = async (host) => {
 // --- 核心：节点解析函数 ---
 const parseNodes = (text) => {
   const nodes = []
-  
-  // 尝试 Base64 解码 (处理订阅内容)
   let decodedText = text
   try {
     const cleanText = text.replace(/\s/g, '')
     decodedText = atob(cleanText.replace(/-/g, '+').replace(/_/g, '/'))
-  } catch (e) {
-    // 如果解码失败，假设是明文或YAML
-  }
+  } catch (e) {}
 
   const lines = decodedText.split('\n')
   const regex = /^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//i
@@ -67,14 +63,10 @@ const parseNodes = (text) => {
     const trimLine = line.trim()
     if (!trimLine) continue
 
-    // 1. 处理 vmess (JSON in Base64)
     if (trimLine.startsWith('vmess://')) {
       try {
-        const b64 = trimLine.substring(8)
-        // 修复：vmess链接可能使用URL safe base64，这里做一个兼容处理
-        const safeB64 = b64.replace(/-/g, '+').replace(/_/g, '/')
-        const jsonStr = atob(safeB64)
-        const config = JSON.parse(jsonStr)
+        const safeB64 = trimLine.substring(8).replace(/-/g, '+').replace(/_/g, '/')
+        const config = JSON.parse(atob(safeB64))
         nodes.push({ name: config.ps || 'vmess节点', type: 'vmess', link: trimLine })
       } catch (e) {
         nodes.push({ name: 'vmess节点(解析失败)', type: 'vmess', link: trimLine })
@@ -82,25 +74,19 @@ const parseNodes = (text) => {
       continue
     }
 
-    // 2. 处理其他带 #name 的协议 (vless, hysteria2, etc)
     if (trimLine.match(regex)) {
       const protocol = trimLine.split(':')[0]
       let name = `${protocol}节点`
-      // 提取 # 后面的备注
       const hashIndex = trimLine.lastIndexOf('#')
       if (hashIndex !== -1) {
-        try {
-          name = decodeURIComponent(trimLine.substring(hashIndex + 1))
-        } catch (e) {
-          name = trimLine.substring(hashIndex + 1)
-        }
+        try { name = decodeURIComponent(trimLine.substring(hashIndex + 1)) } catch (e) { name = trimLine.substring(hashIndex + 1) }
       }
       nodes.push({ name: name, type: protocol, link: trimLine })
       continue
     }
   }
-
-  // 3. 如果没找到链接，尝试匹配 Clash YAML 格式的 name
+  
+  // 简单的 Clash YAML 提取 (仅供预览名称)
   if (nodes.length === 0) {
     const nameRegex = /^\s*-\s*(?:name:|{\s*name:)\s*(.+?)(?:}|)\s*$/gm
     let match
@@ -112,46 +98,39 @@ const parseNodes = (text) => {
   return nodes
 }
 
-// --- 检测接口 (包含节点详情) ---
+// --- 检测接口 ---
 app.post('/check', async (c) => {
   try {
-    // 关键点：这里必须接收 needNodes 参数
-    const { url, type, needNodes } = await c.req.json() 
+    const { url, type, needNodes } = await c.req.json()
     if (!url) return c.json({ success: false, error: '链接为空' })
 
     let resultData = { valid: false, nodeCount: 0, stats: null, location: null, nodes: [] }
 
-    // >>> 场景1：自建节点
+    // 自建节点
     if (type === 'node') {
       const nodeList = parseNodes(url)
-      // 即使只有一个节点，也返回 success: true
       if (nodeList.length === 0) return c.json({ success: false, error: '未检测到有效节点' })
-      
       resultData.valid = true
       resultData.nodeCount = nodeList.length
       if (needNodes) resultData.nodes = nodeList
-
       try {
         const firstLink = nodeList[0].link
         if (firstLink) {
            const temp = firstLink.split('://')[1]
-           const atPart = temp.split('@')
-           const addressPart = atPart.length > 1 ? atPart[1] : atPart[0]
-           const host = addressPart.split(':')[0].split('/')[0].split('?')[0]
+           const host = temp.split('@').pop().split(':')[0].split('/')[0].split('?')[0]
            if (host) resultData.location = await getGeoInfo(host)
         }
       } catch(e) {}
-
       return c.json({ success: true, data: resultData })
     }
 
-    // >>> 场景2：机场订阅
+    // 订阅链接
     const [clashRes, v2rayRes] = await Promise.all([
       fetch(url, { headers: { 'User-Agent': 'Clash/1.0' } }).catch(e => null),
       fetch(url, { headers: { 'User-Agent': 'v2rayNG/1.8.5' } }).catch(e => null)
     ])
     const validRes = clashRes || v2rayRes
-    if (!validRes || !validRes.ok) return c.json({ success: false, error: `连接失败: ${validRes ? validRes.status : 'Network Error'}` })
+    if (!validRes || !validRes.ok) return c.json({ success: false, error: `连接失败` })
 
     // 流量信息
     const infoHeader = (clashRes && clashRes.headers.get('subscription-userinfo')) || (v2rayRes && v2rayRes.headers.get('subscription-userinfo'))
@@ -179,9 +158,7 @@ app.post('/check', async (c) => {
     
     resultData.valid = true
     resultData.nodeCount = nodeList.length
-    
-    // 关键点：如果前端请求了详情，则返回 nodes 数组
-    if (needNodes) resultData.nodes = nodeList 
+    if (needNodes) resultData.nodes = nodeList
 
     return c.json({ success: true, data: resultData })
 
@@ -190,38 +167,44 @@ app.post('/check', async (c) => {
   }
 })
 
-// --- 列表 CRUD ---
+// --- 列表 CRUD (已更新 params 处理) ---
 app.get('/subs', async (c) => {
   if (!c.env.DB) return c.json({ error: 'DB未绑定' }, 500)
   const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all()
   const data = results.map(item => {
     try { item.info = item.info ? JSON.parse(item.info) : null } catch(e) { item.info = null }
+    // 解析 params
+    try { item.params = item.params ? JSON.parse(item.params) : {} } catch(e) { item.params = {} }
     return item
   })
   return c.json({ success: true, data })
 })
 
 app.post('/subs', async (c) => {
-  const { name, url, type, info } = await c.req.json()
+  const { name, url, type, info, params } = await c.req.json()
   const infoStr = info ? JSON.stringify(info) : null
-  const { success } = await c.env.DB.prepare("INSERT INTO subscriptions (name, url, type, info, sort_order) VALUES (?, ?, ?, ?, 0)").bind(name, url, type || 'subscription', infoStr).run()
+  // 保存 params
+  const paramsStr = params ? JSON.stringify(params) : null
+  const { success } = await c.env.DB.prepare("INSERT INTO subscriptions (name, url, type, info, params, sort_order) VALUES (?, ?, ?, ?, ?, 0)").bind(name, url, type || 'subscription', infoStr, paramsStr).run()
   return success ? c.json({ success: true }) : c.json({ success: false }, 500)
 })
 
 app.put('/subs/:id', async (c) => {
   const id = c.req.param('id')
   const body = await c.req.json()
-  const { name, url, status, type, info } = body
+  const { name, url, status, type, info, params } = body
   let query = "UPDATE subscriptions SET updated_at = CURRENT_TIMESTAMP"
-  const params = []
-  if (name !== undefined) { query += ", name = ?"; params.push(name); }
-  if (url !== undefined) { query += ", url = ?"; params.push(url); }
-  if (status !== undefined) { query += ", status = ?"; params.push(status); }
-  if (type !== undefined) { query += ", type = ?"; params.push(type); }
-  if (info !== undefined) { query += ", info = ?"; params.push(info ? JSON.stringify(info) : null); }
+  const sqlParams = []
+  if (name !== undefined) { query += ", name = ?"; sqlParams.push(name); }
+  if (url !== undefined) { query += ", url = ?"; sqlParams.push(url); }
+  if (status !== undefined) { query += ", status = ?"; sqlParams.push(status); }
+  if (type !== undefined) { query += ", type = ?"; sqlParams.push(type); }
+  if (info !== undefined) { query += ", info = ?"; sqlParams.push(info ? JSON.stringify(info) : null); }
+  // 更新 params
+  if (params !== undefined) { query += ", params = ?"; sqlParams.push(params ? JSON.stringify(params) : null); }
   query += " WHERE id = ?"
-  params.push(id)
-  await c.env.DB.prepare(query).bind(...params).run()
+  sqlParams.push(id)
+  await c.env.DB.prepare(query).bind(...sqlParams).run()
   return c.json({ success: true })
 })
 
@@ -231,7 +214,6 @@ app.delete('/subs/:id', async (c) => {
   return c.json({ success: true })
 })
 
-// 排序
 app.post('/sort', async (c) => {
   const { ids } = await c.req.json()
   if (!Array.isArray(ids)) return c.json({ success: false, error: 'Invalid data' })
@@ -241,19 +223,18 @@ app.post('/sort', async (c) => {
   return c.json({ success: true })
 })
 
-// 导入
 app.post('/backup/import', async (c) => {
   const { items } = await c.req.json()
   if (!Array.isArray(items)) return c.json({ success: false, error: 'Invalid data' })
-  const stmt = c.env.DB.prepare("INSERT INTO subscriptions (name, url, type, info, status, sort_order) VALUES (?, ?, ?, ?, ?, ?)")
+  const stmt = c.env.DB.prepare("INSERT INTO subscriptions (name, url, type, info, params, status, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)")
   const batch = items.map(item => {
     const infoStr = item.info ? JSON.stringify(item.info) : null
-    return stmt.bind(item.name, item.url, item.type || 'subscription', infoStr, item.status ?? 1, item.sort_order ?? 0)
+    const paramsStr = item.params ? JSON.stringify(item.params) : null
+    return stmt.bind(item.name, item.url, item.type || 'subscription', infoStr, paramsStr, item.status ?? 1, item.sort_order ?? 0)
   })
   try { await c.env.DB.batch(batch); return c.json({ success: true }) } catch(e) { return c.json({ success: false, error: e.message }) }
 })
 
-// 设置
 app.get('/settings', async (c) => {
   const { results } = await c.env.DB.prepare("SELECT key, value FROM settings").all()
   const settings = {}
@@ -268,7 +249,6 @@ app.post('/settings', async (c) => {
   await c.env.DB.batch(batch)
   return c.json({ success: true })
 })
-
 app.post('/login', async (c) => {
   const { password } = await c.req.json()
   return (password === c.env.ADMIN_PASSWORD) ? c.json({ success: true }) : c.json({ success: false, error: '密码错误' }, 401)

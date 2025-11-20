@@ -6,6 +6,7 @@
     <title>BiaoSUB 管理面板</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet" type="text/css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script>
@@ -33,7 +34,6 @@
             -webkit-backdrop-filter: blur(12px);
             border: 1px solid rgba(255, 255, 255, 0.1);
         }
-        /* 登录虚化背景 */
         .blur-content { filter: blur(5px); pointer-events: none; }
     </style>
 </head>
@@ -44,17 +44,11 @@
     <div v-if="!isLoggedIn" class="fixed inset-0 z-[999] flex items-center justify-center bg-slate-900/90 backdrop-blur-sm">
         <div class="card w-96 glass-panel shadow-2xl border border-slate-600">
             <div class="card-body text-center">
-                <div class="mb-4">
-                    <i class="fa-solid fa-shield-halved text-5xl text-primary"></i>
-                </div>
+                <div class="mb-4"><i class="fa-solid fa-shield-halved text-5xl text-primary"></i></div>
                 <h2 class="text-2xl font-bold text-white mb-2">安全验证</h2>
-                <p class="text-slate-400 text-sm mb-6">BiaoSUB 管理面板</p>
-                
                 <input type="password" v-model="loginPassword" @keyup.enter="handleLogin" placeholder="请输入管理员密码" class="input input-bordered w-full bg-slate-800 text-center focus:border-primary mb-4" />
-                
                 <button @click="handleLogin" class="btn btn-primary w-full" :disabled="loginLoading">
-                    <span v-if="loginLoading" class="loading loading-spinner"></span>
-                    {{ loginLoading ? '验证中...' : '解锁面板' }}
+                    <span v-if="loginLoading" class="loading loading-spinner"></span> {{ loginLoading ? '验证中...' : '解锁面板' }}
                 </button>
                 <p v-if="loginError" class="text-error text-xs mt-3">{{ loginError }}</p>
             </div>
@@ -71,14 +65,10 @@
             </div>
             <div class="flex-none gap-2">
                 <div class="tooltip tooltip-bottom" data-tip="全局设置">
-                    <button @click="openSettings" class="btn btn-circle btn-ghost hover:bg-slate-700">
-                        <i class="fa-solid fa-gear text-xl text-slate-400"></i>
-                    </button>
+                    <button @click="openSettings" class="btn btn-circle btn-ghost hover:bg-slate-700"><i class="fa-solid fa-gear text-xl text-slate-400"></i></button>
                 </div>
                 <div class="tooltip tooltip-bottom" data-tip="退出登录">
-                    <button @click="logout" class="btn btn-circle btn-ghost hover:bg-slate-700 text-red-400">
-                        <i class="fa-solid fa-power-off text-xl"></i>
-                    </button>
+                    <button @click="logout" class="btn btn-circle btn-ghost hover:bg-slate-700 text-red-400"><i class="fa-solid fa-power-off text-xl"></i></button>
                 </div>
                 <div class="w-[1px] h-6 bg-slate-700 mx-2"></div>
                 <button @click="openModal()" class="btn btn-primary btn-sm md:btn-md text-white shadow-lg hover:scale-105 transition-transform">
@@ -93,45 +83,60 @@
                 <div class="stat-title text-slate-400">订阅源</div>
                 <div class="stat-value text-primary">{{ subCount }}</div>
             </div>
-            
             <div class="stat glass-panel rounded-2xl shadow-lg">
                 <div class="stat-figure text-secondary"><i class="fa-solid fa-microchip text-3xl"></i></div>
                 <div class="stat-title text-slate-400">独立节点</div>
                 <div class="stat-value text-secondary">{{ nodeCount }}</div>
             </div>
-
             <div class="glass-panel rounded-2xl shadow-lg p-6 flex flex-col justify-between relative overflow-hidden group">
-                <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                    <i class="fa-solid fa-link text-6xl text-emerald-400"></i>
-                </div>
+                <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity"><i class="fa-solid fa-link text-6xl text-emerald-400"></i></div>
                 <div>
                     <div class="text-slate-400 text-sm font-bold uppercase tracking-wider">聚合订阅</div>
                     <div class="text-emerald-400 text-2xl font-extrabold mt-1">已就绪</div>
                 </div>
                 <div class="mt-4 flex gap-2">
                     <div class="dropdown dropdown-top dropdown-end w-full">
-                        <label tabindex="0" class="btn btn-sm btn-block bg-emerald-500 hover:bg-emerald-600 text-white border-none">
-                            <i class="fa-solid fa-share-nodes"></i> 获取链接
-                        </label>
+                        <label tabindex="0" class="btn btn-sm btn-block bg-emerald-500 hover:bg-emerald-600 text-white border-none"><i class="fa-solid fa-share-nodes"></i> 获取链接</label>
                         <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow-2xl bg-slate-800 rounded-box w-72 border border-slate-600">
                             <li class="menu-title text-slate-400">选择格式</li>
                             <li><a @click="copyLink('v2ray')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-paper-plane text-blue-400 w-5"></i> 复制 v2rayN 订阅</a></li>
                             <li><a @click="copyLink('clash')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-cat text-orange-400 w-5"></i> 复制 Clash 订阅</a></li>
                             <div class="divider my-1"></div>
-                            <li class="text-xs text-slate-500 px-4 py-1">
-                                转换服务: {{ settings.sub_converter_url ? '自定义' : '默认' }}
-                            </li>
+                            <li class="text-xs text-slate-500 px-4 py-1">转换服务: {{ settings.sub_converter_url ? '自定义' : '默认' }}</li>
                         </ul>
                     </div>
                 </div>
             </div>
         </div>
 
+        <div class="flex flex-col md:flex-row justify-between items-center mb-6 gap-4">
+            <h2 class="text-xl font-bold text-white flex items-center gap-2">
+                <i class="fa-solid fa-list-ul text-primary"></i> 资源列表
+            </h2>
+            <div class="join w-full md:w-auto">
+                <div class="relative w-full md:w-64">
+                    <input type="text" v-model="searchText" placeholder="搜索名称或链接..." class="input input-bordered bg-slate-800 border-slate-600 focus:border-primary w-full join-item pl-10" />
+                    <i class="fa-solid fa-search absolute left-3 top-3.5 text-slate-500"></i>
+                </div>
+                <select v-model="filterType" class="select select-bordered bg-slate-800 border-slate-600 join-item">
+                    <option value="all">全部类型</option>
+                    <option value="subscription">仅订阅</option>
+                    <option value="node">仅节点</option>
+                </select>
+            </div>
+        </div>
+
         <div v-if="loading" class="flex justify-center py-20">
             <span class="loading loading-infinity loading-lg text-primary"></span>
         </div>
+        
+        <div v-else-if="filteredItems.length === 0 && items.length > 0" class="text-center py-20 opacity-50">
+            <i class="fa-solid fa-filter-circle-xmark text-6xl mb-4 text-slate-600"></i>
+            <p>没有找到匹配的资源</p>
+        </div>
+
         <div v-else class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div v-for="item in items" :key="item.id" class="card bg-slate-800/50 shadow-xl border border-slate-700 hover:border-primary/50 transition-all duration-300">
+            <div v-for="item in filteredItems" :key="item.id" class="card bg-slate-800/50 shadow-xl border border-slate-700 hover:border-primary/50 transition-all duration-300">
                 <div class="card-body p-6">
                     <div class="flex justify-between items-start gap-4">
                         <div class="mt-1">
@@ -149,6 +154,12 @@
                     </div>
                     <div class="divider my-2 bg-slate-700/50 h-[1px]"></div>
                     <div class="card-actions justify-end gap-2">
+                        <button @click="showQr(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="二维码">
+                            <i class="fa-solid fa-qrcode"></i>
+                        </button>
+                        <button @click="copyToClip(item.url)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="复制链接">
+                            <i class="fa-regular fa-copy"></i>
+                        </button>
                         <button @click="editItem(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-blue-400"><i class="fa-solid fa-pen"></i></button>
                         <button @click="deleteItem(item.id)" class="btn btn-ghost btn-xs text-slate-400 hover:text-red-500"><i class="fa-regular fa-trash-can"></i></button>
                     </div>
@@ -199,6 +210,25 @@
             </div>
         </dialog>
 
+        <dialog class="modal" :class="{ 'modal-open': qrModal.show }">
+            <div class="modal-box bg-slate-800 border border-slate-700 text-center">
+                <h3 class="font-bold text-lg text-white mb-2">{{ qrModal.title }}</h3>
+                <p class="text-xs text-slate-500 mb-6 break-all line-clamp-1">{{ qrModal.url }}</p>
+                
+                <div class="bg-white p-4 rounded-xl inline-block mx-auto">
+                    <img v-if="qrModal.imgData" :src="qrModal.imgData" class="w-64 h-64" />
+                    <span v-else class="loading loading-spinner text-primary"></span>
+                </div>
+                
+                <div class="modal-action flex justify-center mt-6">
+                    <button class="btn btn-primary w-full max-w-xs" @click="qrModal.show=false">关闭</button>
+                </div>
+            </div>
+            <form method="dialog" class="modal-backdrop">
+                <button @click="qrModal.show=false">close</button>
+            </form>
+        </dialog>
+
         <div v-if="toast.show" class="toast toast-bottom toast-end z-50">
             <div class="alert shadow-lg text-white" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'"><span>{{ toast.message }}</span></div>
         </div>
@@ -211,18 +241,21 @@
 
     createApp({
         setup() {
-            // --- 状态变量 ---
+            // --- 状态 ---
             const isLoggedIn = ref(false)
             const loginPassword = ref('')
             const loginLoading = ref(false)
             const loginError = ref('')
             
-            // 资源数据
             const items = ref([])
-            const loading = ref(false) // 初始为 false，登录后才加载
+            const loading = ref(false)
             const submitting = ref(false)
             
-            // UI 控制
+            // 搜索与过滤
+            const searchText = ref('')
+            const filterType = ref('all')
+
+            // UI
             const showModal = ref(false)
             const isEditing = ref(false)
             const currentId = ref(null)
@@ -235,85 +268,37 @@
             const toast = ref({ show: false, message: '', type: 'success' })
             const domain = window.location.origin
 
-            // --- 鉴权核心逻辑 ---
-            
-            // 1. 封装 Fetch，自动带上 Authorization 头
+            // 二维码弹窗状态
+            const qrModal = ref({ show: false, title: '', url: '', imgData: null })
+
+            // --- 鉴权 ---
             const authFetch = async (url, options = {}) => {
                 const token = localStorage.getItem('biaosub_token')
-                const headers = { 
-                    'Content-Type': 'application/json', 
-                    'Authorization': token || '' 
-                }
-                // 合并 headers
+                const headers = { 'Content-Type': 'application/json', 'Authorization': token || '' }
                 options.headers = { ...headers, ...options.headers }
-                
                 const res = await fetch(url, options)
-                
-                // 如果返回 401 (未授权)，强制登出
-                if (res.status === 401) {
-                    logout()
-                    throw new Error('未授权或密码过期')
-                }
+                if (res.status === 401) { logout(); throw new Error('未授权'); }
                 return res
             }
 
-            // 2. 登录处理
             const handleLogin = async () => {
                 if (!loginPassword.value) return
-                loginLoading.value = true
-                loginError.value = ''
-                
+                loginLoading.value = true; loginError.value = ''
                 try {
-                    // 尝试请求登录接口
-                    const res = await fetch(`${API_BASE}/login`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ password: loginPassword.value })
-                    })
+                    const res = await fetch(`${API_BASE}/login`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({password: loginPassword.value}) })
                     const data = await res.json()
-                    
                     if (data.success) {
-                        // 登录成功：保存密码作为 Token (对于个人面板足够安全)
                         localStorage.setItem('biaosub_token', loginPassword.value)
-                        isLoggedIn.value = true
-                        loginPassword.value = '' // 清空输入框
-                        showToast('欢迎回来')
-                        initData() // 加载数据
-                    } else {
-                        loginError.value = data.error || '密码错误'
-                    }
-                } catch (e) {
-                    loginError.value = '网络连接失败'
-                } finally {
-                    loginLoading.value = false
-                }
+                        isLoggedIn.value = true; loginPassword.value = ''; showToast('欢迎回来'); initData()
+                    } else { loginError.value = data.error }
+                } catch (e) { loginError.value = '网络连接失败' } finally { loginLoading.value = false }
             }
 
-            // 3. 登出
-            const logout = () => {
-                localStorage.removeItem('biaosub_token')
-                isLoggedIn.value = false
-                items.value = [] // 清空敏感数据
-            }
+            const logout = () => { localStorage.removeItem('biaosub_token'); isLoggedIn.value = false; items.value = [] }
+            const checkLoginStatus = () => { if (localStorage.getItem('biaosub_token')) { isLoggedIn.value = true; initData() } }
 
-            // 4. 初始化检查
-            const checkLoginStatus = () => {
-                const token = localStorage.getItem('biaosub_token')
-                if (token) {
-                    isLoggedIn.value = true
-                    initData()
-                } else {
-                    isLoggedIn.value = false
-                }
-            }
-
-            // --- 业务逻辑 ---
-
-            const initData = () => {
-                fetchItems()
-                fetchSettings()
-            }
-
+            // --- 业务 ---
+            const initData = () => { fetchItems(); fetchSettings() }
             const fetchItems = async () => {
                 loading.value = true
                 try {
@@ -322,30 +307,42 @@
                     if (data.success) items.value = data.data
                 } catch (e) { console.error(e) } finally { loading.value = false }
             }
-
             const fetchSettings = async () => {
                 try {
                     const res = await authFetch(`${API_BASE}/settings`)
                     const data = await res.json()
-                    if (data.success && data.data) {
-                        settings.value = data.data
-                        settingsForm.value = { ...data.data }
-                    }
+                    if (data.success && data.data) { settings.value = data.data; settingsForm.value = { ...data.data } }
                 } catch (e) {}
+            }
+
+            // 过滤逻辑
+            const filteredItems = computed(() => {
+                return items.value.filter(item => {
+                    // 类型过滤
+                    if (filterType.value !== 'all' && item.type !== filterType.value) return false
+                    // 搜索关键词过滤 (不区分大小写)
+                    const term = searchText.value.toLowerCase()
+                    return item.name.toLowerCase().includes(term) || item.url.toLowerCase().includes(term)
+                })
+            })
+
+            // 二维码逻辑
+            const showQr = async (item) => {
+                qrModal.value = { show: true, title: item.name, url: item.url, imgData: null }
+                // 使用 QRCode 库生成
+                try {
+                    const url = await QRCode.toDataURL(item.url, { width: 300, margin: 2 })
+                    qrModal.value.imgData = url
+                } catch (e) {
+                    showToast('生成二维码失败', 'error')
+                }
             }
 
             const saveSettings = async () => {
                 submitting.value = true
                 try {
-                    const res = await authFetch(`${API_BASE}/settings`, {
-                        method: 'POST',
-                        body: JSON.stringify(settingsForm.value)
-                    })
-                    if ((await res.json()).success) {
-                        showToast('设置已保存')
-                        settings.value = { ...settingsForm.value }
-                        showSettingsModal.value = false
-                    }
+                    await authFetch(`${API_BASE}/settings`, { method: 'POST', body: JSON.stringify(settingsForm.value) })
+                    showToast('设置已保存'); settings.value = { ...settingsForm.value }; showSettingsModal.value = false
                 } catch (e) { showToast('保存失败', 'error') } finally { submitting.value = false }
             }
 
@@ -356,31 +353,20 @@
                     const url = isEditing.value ? `${API_BASE}/subs/${currentId.value}` : `${API_BASE}/subs`
                     const method = isEditing.value ? 'PUT' : 'POST'
                     const payload = { name: form.value.name, url: form.value.url, type: activeTab.value }
-                    const res = await authFetch(url, { method, body: JSON.stringify(payload) })
-                    if ((await res.json()).success) { showToast('保存成功'); fetchItems(); showModal.value=false; }
+                    if ((await (await authFetch(url, { method, body: JSON.stringify(payload) })).json()).success) { showToast('保存成功'); fetchItems(); showModal.value=false; }
                 } catch (e) { showToast('操作失败', 'error') } finally { submitting.value = false }
             }
 
-            const deleteItem = async (id) => { 
-                if(confirm('确认删除?')) { 
-                    await authFetch(`${API_BASE}/subs/${id}`, { method: 'DELETE' })
-                    fetchItems()
-                } 
-            }
-            
+            const deleteItem = async (id) => { if(confirm('确认删除?')) { await authFetch(`${API_BASE}/subs/${id}`, { method: 'DELETE' }); fetchItems(); } }
             const toggleStatus = async (item) => {
                 item.status = item.status === 1 ? 0 : 1
                 await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({status: item.status}) })
             }
 
-            // --- UI 辅助 ---
-            const openModal = (item) => {
-                if(item) { form.value = {...item}; currentId.value = item.id; activeTab.value = item.type; isEditing.value = true }
-                else { form.value = {name:'', url:''}; activeTab.value = 'subscription'; isEditing.value = false }
-                showModal.value = true
-            }
+            const copyToClip = (text) => navigator.clipboard.writeText(text).then(() => showToast('已复制'))
+            const openModal = (item) => { if(item) { form.value={...item}; currentId.value=item.id; activeTab.value=item.type; isEditing.value=true } else { form.value={name:'',url:''}; activeTab.value='subscription'; isEditing.value=false } showModal.value=true }
             const openSettings = () => { settingsForm.value = { ...settings.value }; showSettingsModal.value = true }
-            const showToast = (m, t='success') => { toast.value = {show:true, message:m, type:t}; setTimeout(()=>toast.value.show=false, 3000) }
+            const showToast = (m, t='success') => { toast.value={show:true, message:m, type:t}; setTimeout(()=>toast.value.show=false, 3000) }
             const editItem = (i) => openModal(i)
             const subCount = computed(() => items.value.filter(i => i.type === 'subscription').length)
             const nodeCount = computed(() => items.value.filter(i => i.type === 'node').length)
@@ -401,10 +387,10 @@
 
             return { 
                 isLoggedIn, loginPassword, loginLoading, loginError, handleLogin, logout,
-                items, loading, submitting, subCount, nodeCount,
-                showModal, isEditing, activeTab, form, showSettingsModal, settingsForm, settings,
-                saveItem, deleteItem, toggleStatus, openModal, editItem, openSettings, saveSettings,
-                toast, copyLink
+                items, filteredItems, loading, submitting, subCount, nodeCount, searchText, filterType,
+                showModal, isEditing, activeTab, form, showSettingsModal, settingsForm, settings, qrModal,
+                saveItem, deleteItem, toggleStatus, openModal, editItem, openSettings, saveSettings, showQr,
+                toast, copyLink, copyToClip
             }
         }
     }).mount('#app')

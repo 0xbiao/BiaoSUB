@@ -29,38 +29,31 @@ const formatBytes = (bytes) => {
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
-
 const formatDate = (timestamp) => {
   if (!timestamp || isNaN(timestamp)) return '长期'
   const date = new Date(timestamp.toString().length === 10 ? timestamp * 1000 : timestamp)
   return date.toLocaleDateString()
 }
-
 const getGeoInfo = async (host) => {
   try {
     const res = await fetch(`http://ip-api.com/json/${host}?fields=status,country,countryCode,query`)
     const data = await res.json()
-    if (data.status === 'success') {
-      return { country: data.country, code: data.countryCode, ip: data.query }
-    }
+    if (data.status === 'success') return { country: data.country, code: data.countryCode, ip: data.query }
   } catch (e) {}
   return null
 }
 
-// --- 检测接口 (双重探测版) ---
+// --- 业务接口 ---
+
+// 检测接口 (保持双重探测)
 app.post('/check', async (c) => {
   try {
     const { url, type } = await c.req.json()
     if (!url) return c.json({ success: false, error: '链接为空' })
 
-    let resultData = {
-      valid: false,
-      nodeCount: 0,
-      stats: null,
-      location: null
-    }
+    let resultData = { valid: false, nodeCount: 0, stats: null, location: null }
 
-    // >>> 场景1：自建节点 (保持不变)
+    // 自建节点
     if (type === 'node') {
       const lines = url.split('\n').filter(l => l.trim().length > 0)
       const regex = /^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//
@@ -79,31 +72,23 @@ app.post('/check', async (c) => {
           }
         }
       }
-      if (validCount === 0) return c.json({ success: false, error: '未检测到有效节点链接' })
+      if (validCount === 0) return c.json({ success: false, error: '无效链接' })
       resultData.valid = true
       resultData.nodeCount = validCount
       if (firstHost) resultData.location = await getGeoInfo(firstHost)
       return c.json({ success: true, data: resultData })
     }
 
-    // >>> 场景2：机场订阅 (双重探测)
-    
-    // 并行发起两个请求：一个伪装 Clash (拿流量信息)，一个伪装 v2rayNG (拿节点列表)
+    // 机场订阅 (双重探测)
     const [clashRes, v2rayRes] = await Promise.all([
       fetch(url, { headers: { 'User-Agent': 'Clash/1.0' } }).catch(e => null),
       fetch(url, { headers: { 'User-Agent': 'v2rayNG/1.8.5' } }).catch(e => null)
     ])
-
-    // 1. 优先从 Clash 的响应头里抓取流量信息 (因为它最准)
-    // 如果 Clash 失败，再试 v2ray 的
     const validRes = clashRes || v2rayRes
-    if (!validRes || !validRes.ok) {
-      return c.json({ success: false, error: `连接失败` })
-    }
+    if (!validRes || !validRes.ok) return c.json({ success: false, error: `连接失败` })
 
-    const infoHeader = (clashRes && clashRes.headers.get('subscription-userinfo')) || 
-                       (v2rayRes && v2rayRes.headers.get('subscription-userinfo'))
-    
+    // 流量
+    const infoHeader = (clashRes && clashRes.headers.get('subscription-userinfo')) || (v2rayRes && v2rayRes.headers.get('subscription-userinfo'))
     if (infoHeader) {
       const info = {}
       infoHeader.split(';').forEach(part => {
@@ -116,51 +101,36 @@ app.post('/check', async (c) => {
           used: formatBytes(used),
           total: formatBytes(info.total),
           expire: formatDate(info.expire),
-          percent: Math.min(100, Math.round((used / info.total) * 100))
+          percent: Math.min(100, Math.round((used / info.total) * 100)),
+          raw_expire: info.expire // 存储原始时间戳用于排序或判断
         }
       }
     }
 
-    // 2. 优先使用 v2ray 的响应体来计算节点 (因为它返回 Base64，最好算)
-    // 如果 v2ray 请求失败，才退而求其次用 Clash 的
+    // 节点计数
     const text = (v2rayRes && v2rayRes.ok) ? await v2rayRes.text() : await clashRes.text()
-    
     try {
-        // 尝试 Base64 解码
         const cleanText = text.replace(/\s/g, '')
         const decoded = atob(cleanText.replace(/-/g, '+').replace(/_/g, '/'))
-        // 过滤有效行
-        resultData.nodeCount = decoded.split('\n')
-            .map(line => line.trim())
-            .filter(line => line && line.match(/^[a-z0-9]+:\/\//i))
-            .length
+        resultData.nodeCount = decoded.split('\n').map(l => l.trim()).filter(l => l && l.match(/^[a-z0-9]+:\/\//i)).length
     } catch (e) {
-        // 解码失败，尝试直接匹配
-        const linkCount = text.split('\n')
-            .filter(line => line.trim().match(/^[a-z0-9]+:\/\//i))
-            .length
-        if (linkCount > 0) {
-            resultData.nodeCount = linkCount
-        } else {
-            // 尝试匹配 YAML (name: xxx)
+        const linkCount = text.split('\n').filter(l => l.trim().match(/^[a-z0-9]+:\/\//i)).length
+        if (linkCount > 0) resultData.nodeCount = linkCount
+        else {
             const yamlMatches = text.match(/^\s*-\s*(name:|{\s*name:)/gm)
             if (yamlMatches) resultData.nodeCount = yamlMatches.length
         }
     }
-    
     resultData.valid = true
     return c.json({ success: true, data: resultData })
-
-  } catch (e) {
-    return c.json({ success: false, error: e.message })
-  }
+  } catch (e) { return c.json({ success: false, error: e.message }) }
 })
 
-// --- 列表 CRUD ---
-
+// 列表 (按 sort_order 排序)
 app.get('/subs', async (c) => {
   if (!c.env.DB) return c.json({ error: 'DB未绑定' }, 500)
-  const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY created_at DESC").all()
+  // 优先 sort_order 升序，其次 id 降序
+  const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all()
   const data = results.map(item => {
     try { item.info = item.info ? JSON.parse(item.info) : null } catch(e) { item.info = null }
     return item
@@ -168,10 +138,43 @@ app.get('/subs', async (c) => {
   return c.json({ success: true, data })
 })
 
+// 保存排序
+app.post('/sort', async (c) => {
+  const { ids } = await c.req.json()
+  if (!Array.isArray(ids)) return c.json({ success: false, error: 'Invalid data' })
+  
+  const stmt = c.env.DB.prepare("UPDATE subscriptions SET sort_order = ? WHERE id = ?")
+  const batch = ids.map((id, index) => stmt.bind(index, id))
+  await c.env.DB.batch(batch)
+  return c.json({ success: true })
+})
+
+// 批量导入
+app.post('/backup/import', async (c) => {
+  const { items } = await c.req.json()
+  if (!Array.isArray(items)) return c.json({ success: false, error: 'Invalid data' })
+  
+  const stmt = c.env.DB.prepare("INSERT INTO subscriptions (name, url, type, info, status, sort_order) VALUES (?, ?, ?, ?, ?, ?)")
+  const batch = items.map(item => {
+    // 兼容旧数据，重新生成
+    const infoStr = item.info ? JSON.stringify(item.info) : null
+    return stmt.bind(item.name, item.url, item.type || 'subscription', infoStr, item.status ?? 1, item.sort_order ?? 0)
+  })
+  
+  try {
+    await c.env.DB.batch(batch)
+    return c.json({ success: true })
+  } catch(e) {
+    return c.json({ success: false, error: e.message })
+  }
+})
+
+// 常规 CRUD
 app.post('/subs', async (c) => {
   const { name, url, type, info } = await c.req.json()
   const infoStr = info ? JSON.stringify(info) : null
-  const { success } = await c.env.DB.prepare("INSERT INTO subscriptions (name, url, type, info) VALUES (?, ?, ?, ?)").bind(name, url, type || 'subscription', infoStr).run()
+  // 新增时 sort_order 设为 0 (或者你想设为最大值排到最后也可以，这里设0排前面)
+  const { success } = await c.env.DB.prepare("INSERT INTO subscriptions (name, url, type, info, sort_order) VALUES (?, ?, ?, ?, 0)").bind(name, url, type || 'subscription', infoStr).run()
   return success ? c.json({ success: true }) : c.json({ success: false }, 500)
 })
 
@@ -198,13 +201,13 @@ app.delete('/subs/:id', async (c) => {
   return c.json({ success: true })
 })
 
+// 设置相关
 app.get('/settings', async (c) => {
   const { results } = await c.env.DB.prepare("SELECT key, value FROM settings").all()
   const settings = {}
   results.forEach(row => { settings[row.key] = row.value })
   return c.json({ success: true, data: settings })
 })
-
 app.post('/settings', async (c) => {
   const body = await c.req.json()
   const stmt = c.env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")

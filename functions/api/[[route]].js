@@ -185,14 +185,18 @@ app.post('/check', async (c) => {
 
 // CRUD
 app.get('/subs', async (c) => {
-  if (!c.env.DB) return c.json({ error: 'DB未绑定' }, 500)
-  const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all()
-  const data = results.map(item => {
-    try { item.info = item.info ? JSON.parse(item.info) : null } catch(e) { item.info = null }
-    try { item.params = item.params ? JSON.parse(item.params) : {} } catch(e) { item.params = {} }
-    return item
-  })
-  return c.json({ success: true, data })
+  if (!c.env.DB) return c.json({ error: 'DB未绑定 (请在CF设置中绑定D1数据库)' }, 500)
+  try {
+      const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all()
+      const data = results.map(item => {
+        try { item.info = item.info ? JSON.parse(item.info) : null } catch(e) { item.info = null }
+        try { item.params = item.params ? JSON.parse(item.params) : {} } catch(e) { item.params = {} }
+        return item
+      })
+      return c.json({ success: true, data })
+  } catch (e) {
+      return c.json({ error: '数据库查询失败: ' + e.message }, 500)
+  }
 })
 
 app.post('/subs', async (c) => {
@@ -250,11 +254,15 @@ app.post('/backup/import', async (c) => {
 
 // Settings
 app.get('/settings', async (c) => {
-  const { results } = await c.env.DB.prepare("SELECT key, value FROM settings").all()
-  const settings = {}
-  results.forEach(row => { settings[row.key] = row.value })
-  return c.json({ success: true, data: settings })
+  if (!c.env.DB) return c.json({ success: false, error: 'DB Missing' }, 500)
+  try {
+      const { results } = await c.env.DB.prepare("SELECT key, value FROM settings").all()
+      const settings = {}
+      results.forEach(row => { settings[row.key] = row.value })
+      return c.json({ success: true, data: settings })
+  } catch(e) { return c.json({ success: true, data: {} }) }
 })
+
 app.post('/settings', async (c) => {
   const body = await c.req.json()
   const stmt = c.env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
@@ -264,22 +272,24 @@ app.post('/settings', async (c) => {
   return c.json({ success: true })
 })
 
-// --- Template CRUD (新增) ---
+// Template CRUD
 app.get('/template/default', async (c) => {
-    const { results } = await c.env.DB.prepare("SELECT content FROM templates WHERE is_default = 1 LIMIT 1").all()
-    if (results.length > 0) {
-        return c.json({ success: true, data: results[0].content })
-    } else {
-        return c.json({ success: false, error: 'No default template found' })
-    }
+    try {
+        const { results } = await c.env.DB.prepare("SELECT content FROM templates WHERE is_default = 1 LIMIT 1").all()
+        if (results.length > 0) {
+            return c.json({ success: true, data: results[0].content })
+        } else {
+            return c.json({ success: false, error: 'No default template found' })
+        }
+    } catch(e) { return c.json({ success: false, error: e.message }) }
 })
 
 app.post('/template/default', async (c) => {
     const { content } = await c.req.json()
-    // 更新默认模板，假设 ID 1 是默认，或者通过 is_default 查找
-    // 简单起见，我们更新所有 is_default=1 的（通常只有一个）
-    await c.env.DB.prepare("UPDATE templates SET content = ? WHERE is_default = 1").bind(content).run()
-    return c.json({ success: true })
+    try {
+        await c.env.DB.prepare("UPDATE templates SET content = ? WHERE is_default = 1").bind(content).run()
+        return c.json({ success: true })
+    } catch(e) { return c.json({ success: false, error: e.message }) }
 })
 
 app.post('/login', async (c) => {

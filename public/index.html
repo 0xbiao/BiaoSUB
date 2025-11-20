@@ -24,8 +24,7 @@
         .cursor-move { cursor: grab; }
         .border-warning-custom { border-color: #fbbf24 !important; border-width: 1px; }
         .border-error-custom { border-color: #ef4444 !important; border-width: 1px; }
-        /* 代码编辑器样式优化 */
-        textarea.code-editor { font-family: 'Menlo', 'Monaco', 'Courier New', monospace; white-space: pre; overflow-wrap: normal; overflow-x: scroll; }
+        textarea.code-editor { font-family: monospace; white-space: pre; overflow-wrap: normal; overflow-x: scroll; }
         ::-webkit-scrollbar { width: 8px; height: 8px; }
         ::-webkit-scrollbar-track { background: #1e293b; }
         ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
@@ -97,7 +96,6 @@
                             </label>
                             <ul tabindex="0" class="dropdown-content z-[100] menu p-2 shadow-2xl bg-slate-800 rounded-box w-72 border border-slate-600 mb-2">
                                 <li class="menu-title text-slate-400">选择格式</li>
-                                <li><a @click="copyLink('v2ray')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-paper-plane text-blue-400 w-5"></i> v2rayN 订阅</a></li>
                                 <li><a @click="copyLink('clash')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-cat text-orange-400 w-5"></i> Clash 订阅</a></li>
                                 <div class="divider my-1"></div>
                                 <li class="text-xs text-slate-500 px-4 py-1">转换后端: {{ settings.sub_converter_url ? '自定义' : '默认' }}</li>

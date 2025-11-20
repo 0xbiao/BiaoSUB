@@ -8,6 +8,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet" type="text/css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script>
@@ -63,31 +64,48 @@
             </div>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-            <div class="stat glass-panel rounded-2xl shadow-lg">
-                <div class="stat-figure text-primary"><i class="fa-solid fa-globe text-3xl"></i></div>
-                <div class="stat-title text-slate-400">订阅源</div>
-                <div class="stat-value text-primary">{{ subCount }}</div>
-            </div>
-            <div class="stat glass-panel rounded-2xl shadow-lg">
-                <div class="stat-figure text-secondary"><i class="fa-solid fa-microchip text-3xl"></i></div>
-                <div class="stat-title text-slate-400">独立节点</div>
-                <div class="stat-value text-secondary">{{ nodeCount }}</div>
-            </div>
-            <div class="glass-panel rounded-2xl shadow-lg p-6 flex flex-col justify-between relative overflow-hidden group">
-                <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity"><i class="fa-solid fa-link text-6xl text-emerald-400"></i></div>
-                <div><div class="text-slate-400 text-sm font-bold uppercase tracking-wider">聚合订阅</div><div class="text-emerald-400 text-2xl font-extrabold mt-1">已就绪</div></div>
-                <div class="mt-4 flex gap-2">
-                    <div class="dropdown dropdown-top dropdown-end w-full">
-                        <label tabindex="0" class="btn btn-sm btn-block bg-emerald-500 hover:bg-emerald-600 text-white border-none"><i class="fa-solid fa-share-nodes"></i> 获取链接</label>
-                        <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow-2xl bg-slate-800 rounded-box w-72 border border-slate-600">
-                            <li class="menu-title text-slate-400">选择格式</li>
-                            <li><a @click="copyLink('v2ray')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-paper-plane text-blue-400 w-5"></i> v2rayN 订阅</a></li>
-                            <li><a @click="copyLink('clash')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-cat text-orange-400 w-5"></i> Clash 订阅</a></li>
-                            <div class="divider my-1"></div>
-                            <li class="text-xs text-slate-500 px-4 py-1">转换服务: {{ settings.sub_converter_url ? '自定义' : '默认' }}</li>
-                        </ul>
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-10">
+            <div class="md:col-span-1 flex flex-col gap-6">
+                <div class="stat glass-panel rounded-2xl shadow-lg py-4">
+                    <div class="stat-figure text-primary"><i class="fa-solid fa-globe text-3xl"></i></div>
+                    <div class="stat-title text-slate-400">订阅源</div>
+                    <div class="stat-value text-primary">{{ subCount }}</div>
+                </div>
+                <div class="stat glass-panel rounded-2xl shadow-lg py-4">
+                    <div class="stat-figure text-secondary"><i class="fa-solid fa-microchip text-3xl"></i></div>
+                    <div class="stat-title text-slate-400">独立节点</div>
+                    <div class="stat-value text-secondary">{{ nodeCount }}</div>
+                </div>
+                <div class="glass-panel rounded-2xl shadow-lg p-4 flex flex-col justify-between relative overflow-hidden group h-full">
+                    <div class="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity"><i class="fa-solid fa-link text-6xl text-emerald-400"></i></div>
+                    <div><div class="text-slate-400 text-sm font-bold uppercase tracking-wider">聚合订阅</div><div class="text-emerald-400 text-xl font-extrabold mt-1">已就绪</div></div>
+                    <div class="mt-2 flex gap-2">
+                        <div class="dropdown dropdown-top dropdown-end w-full">
+                            <label tabindex="0" class="btn btn-sm btn-block bg-emerald-500 hover:bg-emerald-600 text-white border-none"><i class="fa-solid fa-share-nodes"></i> 获取链接</label>
+                            <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow-2xl bg-slate-800 rounded-box w-72 border border-slate-600">
+                                <li class="menu-title text-slate-400">选择格式</li>
+                                <li><a @click="copyLink('v2ray')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-paper-plane text-blue-400 w-5"></i> v2rayN 订阅</a></li>
+                                <li><a @click="copyLink('clash')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-cat text-orange-400 w-5"></i> Clash 订阅</a></li>
+                                <div class="divider my-1"></div>
+                                <li class="text-xs text-slate-500 px-4 py-1">转换服务: {{ settings.sub_converter_url ? '自定义' : '默认' }}</li>
+                            </ul>
+                        </div>
                     </div>
+                </div>
+            </div>
+            
+            <div class="md:col-span-3 grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="glass-panel rounded-2xl shadow-lg p-4 flex flex-col items-center justify-center relative">
+                     <h3 class="text-slate-400 text-sm font-bold absolute top-4 left-4">总流量池状态</h3>
+                     <div class="w-full h-48 flex items-center justify-center">
+                         <canvas id="trafficChart"></canvas>
+                     </div>
+                </div>
+                <div class="glass-panel rounded-2xl shadow-lg p-4 flex flex-col items-center justify-center relative">
+                    <h3 class="text-slate-400 text-sm font-bold absolute top-4 left-4">流量使用 Top 5</h3>
+                     <div class="w-full h-48 flex items-center justify-center">
+                         <canvas id="usageChart"></canvas>
+                     </div>
                 </div>
             </div>
         </div>
@@ -155,7 +173,7 @@
                     <div class="card-actions justify-between items-center">
                         <button @click="refreshItem(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-accent tooltip tooltip-right" data-tip="刷新" :class="{'loading': item.refreshing}"><i v-if="!item.refreshing" class="fa-solid fa-rotate-right"></i></button>
                         <div class="flex gap-2">
-                            <button @click="previewNodes(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="预览节点"><i class="fa-regular fa-eye"></i></button>
+                            <button @click="previewNodes(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="预览与测试"><i class="fa-regular fa-eye"></i></button>
                             <button @click="showQr(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="二维码"><i class="fa-solid fa-qrcode"></i></button>
                             <button @click="copyToClip(item.url)" class="btn btn-ghost btn-xs text-slate-400 hover:text-white tooltip tooltip-bottom" data-tip="复制"><i class="fa-regular fa-copy"></i></button>
                             <button @click="editItem(item)" class="btn btn-ghost btn-xs text-slate-400 hover:text-blue-400"><i class="fa-solid fa-pen"></i></button>
@@ -240,27 +258,45 @@
             <div class="modal-box bg-slate-800 border border-slate-700 w-11/12 max-w-3xl">
                 <div class="flex justify-between items-center mb-4">
                     <h3 class="font-bold text-lg text-white flex items-center gap-2">
-                        <i class="fa-solid fa-list-check text-primary"></i> 节点预览 
+                        <i class="fa-solid fa-list-check text-primary"></i> 节点测试与预览 
                         <span class="badge badge-neutral">{{ previewModal.nodes.length }}</span>
                     </h3>
-                    <button class="btn btn-sm btn-circle btn-ghost" @click="previewModal.show=false">✕</button>
+                    <div class="flex gap-2">
+                        <button @click="testAllNodes" class="btn btn-xs btn-accent" :disabled="testingAll">
+                            <span v-if="testingAll" class="loading loading-spinner loading-xs"></span>
+                            {{ testingAll ? '测试中' : '测试全部' }}
+                        </button>
+                        <button class="btn btn-sm btn-circle btn-ghost" @click="previewModal.show=false">✕</button>
+                    </div>
                 </div>
                 <div class="bg-slate-900 rounded-lg p-1 min-h-[200px] max-h-[60vh] overflow-y-auto custom-scrollbar">
                     <div v-if="previewLoading" class="flex justify-center items-center h-40"><span class="loading loading-spinner loading-lg text-primary"></span></div>
                     <div v-else-if="previewModal.nodes.length === 0" class="text-center py-10 text-slate-500">暂无节点信息或解析失败</div>
                     <div v-else class="grid grid-cols-1 gap-1">
                         <div v-for="(node, idx) in previewModal.nodes" :key="idx" class="flex items-center justify-between p-3 hover:bg-slate-800 rounded transition-colors group">
-                            <div class="flex items-center gap-3 min-w-0">
+                            <div class="flex items-center gap-3 min-w-0 flex-1">
                                 <span class="text-xs font-mono text-slate-500 w-6 text-right">{{ idx + 1 }}</span>
-                                <span class="badge badge-sm badge-outline shrink-0">{{ node.type }}</span>
-                                <span class="text-sm text-slate-200 truncate" :title="node.name">{{ node.name }}</span>
+                                <span class="badge badge-sm badge-outline shrink-0 w-16 justify-center">{{ node.type }}</span>
+                                <span class="text-sm text-slate-200 truncate flex-1" :title="node.name">{{ node.name }}</span>
+                                
+                                <span v-if="node.latency !== undefined" class="badge badge-sm font-mono w-16 justify-center" 
+                                      :class="getLatencyClass(node.latency)">
+                                      {{ node.latency === -1 ? 'Timeout' : node.latency + 'ms' }}
+                                </span>
                             </div>
-                            <button v-if="node.link" @click="copyToClip(node.link)" class="btn btn-ghost btn-xs text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity"><i class="fa-regular fa-copy"></i></button>
+                            <div class="flex gap-2">
+                                <button @click="testNodeLatency(node)" class="btn btn-ghost btn-xs text-slate-400 hover:text-accent tooltip tooltip-left" data-tip="测试延迟">
+                                    <i class="fa-solid fa-bolt" :class="{'fa-fade': node.testing}"></i>
+                                </button>
+                                <button v-if="node.link" @click="copyToClip(node.link)" class="btn btn-ghost btn-xs text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <i class="fa-regular fa-copy"></i>
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
                 <div class="modal-action flex justify-between items-center mt-4">
-                    <div class="text-xs text-slate-500">仅展示解析成功的节点</div>
+                    <div class="text-xs text-slate-500">真机测试：使用 Cloudflare 边缘节点连接目标端口</div>
                     <div class="flex gap-2">
                         <button class="btn btn-ghost" @click="previewModal.show=false">关闭</button>
                         <button class="btn btn-primary" @click="copyAllNodes" :disabled="previewModal.nodes.length === 0"><i class="fa-regular fa-copy"></i> 复制全部节点</button>
@@ -308,7 +344,6 @@
             const items = ref([]); const loading = ref(false); const submitting = ref(false)
             const searchText = ref(''); const filterType = ref('all')
             
-            // 初始化 Form 数据结构，包含 params.include 和 params.ua
             const showModal = ref(false); const isEditing = ref(false); const currentId = ref(null); const activeTab = ref('subscription'); 
             const form = ref({ name: '', url: '', params: { include: [], ua: '' } }) 
             
@@ -323,6 +358,11 @@
             const refreshingAll = ref(false)
             const previewModal = ref({ show: false, nodes: [] })
             const previewLoading = ref(false)
+            const testingAll = ref(false)
+
+            // Charts
+            let trafficChartInstance = null
+            let usageChartInstance = null
 
             const authFetch = async (url, options = {}) => {
                 const token = localStorage.getItem('biaosub_token')
@@ -344,16 +384,105 @@
                     const data = await res.json()
                     if (data.success) { 
                         items.value = data.data.map(i => {
-                            // 确保 params 结构存在
                             if (!i.params) i.params = {}
                             if (!i.params.include) i.params.include = []
                             if (!i.params.ua) i.params.ua = ''
                             return i
                         }); 
-                        nextTick(() => initSortable()) 
+                        nextTick(() => {
+                            initSortable()
+                            initCharts()
+                        }) 
                     }
                 } catch (e) {} finally { loading.value = false }
             }
+
+            // --- Charts Logic ---
+            const initCharts = () => {
+                if (!items.value) return
+                
+                // 1. Total Traffic
+                let totalUsed = 0
+                let totalAvailable = 0
+                let hasTotalData = false
+
+                // 2. Usage by Subscription
+                const subNames = []
+                const subUsage = []
+
+                items.value.forEach(item => {
+                    if (item.info && item.info.stats && item.info.stats.raw_total) {
+                        const used = item.info.stats.raw_used || 0
+                        const total = item.info.stats.raw_total || 0
+                        totalUsed += used
+                        totalAvailable += total
+                        hasTotalData = true
+                        
+                        // Top usage logic
+                        subNames.push(item.name)
+                        subUsage.push(used)
+                    }
+                })
+
+                // Update Traffic Chart
+                const ctxTraffic = document.getElementById('trafficChart')
+                if (ctxTraffic) {
+                    if (trafficChartInstance) trafficChartInstance.destroy()
+                    trafficChartInstance = new Chart(ctxTraffic, {
+                        type: 'doughnut',
+                        data: {
+                            labels: ['已用流量', '剩余流量'],
+                            datasets: [{
+                                data: hasTotalData ? [totalUsed, Math.max(0, totalAvailable - totalUsed)] : [0, 1],
+                                backgroundColor: ['#ec4899', '#334155'],
+                                borderWidth: 0
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: { legend: { position: 'right', labels: { color: '#94a3b8' } } },
+                            cutout: '70%'
+                        }
+                    })
+                }
+
+                // Update Usage Chart
+                const ctxUsage = document.getElementById('usageChart')
+                if (ctxUsage) {
+                    if (usageChartInstance) usageChartInstance.destroy()
+                    // Sort and take top 5
+                    const combined = subNames.map((name, i) => ({ name, usage: subUsage[i] }))
+                    combined.sort((a, b) => b.usage - a.usage)
+                    const top5 = combined.slice(0, 5)
+                    
+                    usageChartInstance = new Chart(ctxUsage, {
+                        type: 'bar',
+                        data: {
+                            labels: top5.map(i => i.name),
+                            datasets: [{
+                                label: '已用 (GB)',
+                                data: top5.map(i => (i.usage / 1024 / 1024 / 1024).toFixed(2)),
+                                backgroundColor: '#6366f1',
+                                borderRadius: 4
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            indexAxis: 'y',
+                            plugins: { legend: { display: false } },
+                            scales: {
+                                x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } },
+                                y: { grid: { display: false }, ticks: { color: '#cbd5e1' } }
+                            }
+                        }
+                    })
+                }
+            }
+            // Re-render charts when items change
+            watch(items, () => { nextTick(initCharts) }, { deep: true })
+
 
             const canSort = computed(() => searchText.value === '' && filterType.value === 'all')
             const initSortable = () => {
@@ -371,13 +500,11 @@
             }
             watch([searchText, filterType], () => { if(sortableInstance) sortableInstance.option("disabled", !canSort.value) })
 
-            // --- 自选节点加载逻辑 ---
             const loadNodesForSelection = async () => {
                 if (!form.value.url) return showToast('请输入订阅链接或节点内容', 'error')
                 selectionLoading.value = true
                 selectionNodes.value = []
                 try {
-                    // 传递 ua 参数
                     const res = await authFetch(`${API_BASE}/check`, { 
                         method: 'POST', 
                         body: JSON.stringify({ url: form.value.url, type: activeTab.value, needNodes: true, ua: form.value.params.ua }) 
@@ -417,6 +544,52 @@
                 } finally {
                     previewLoading.value = false
                 }
+            }
+
+            // --- Test Latency ---
+            const testNodeLatency = async (node) => {
+                if (node.testing) return
+                node.testing = true
+                node.latency = undefined // Reset
+                
+                try {
+                    const res = await authFetch(`${API_BASE}/test-node`, {
+                        method: 'POST',
+                        body: JSON.stringify({ link: node.link })
+                    })
+                    const data = await res.json()
+                    if (data.success) {
+                        node.latency = data.latency
+                    } else {
+                        node.latency = -1 // Error/Timeout
+                    }
+                } catch(e) {
+                    node.latency = -1
+                } finally {
+                    node.testing = false
+                }
+            }
+            
+            const testAllNodes = async () => {
+                if (testingAll.value || previewModal.value.nodes.length === 0) return
+                testingAll.value = true
+                
+                // Batch process to avoid browser/worker overload
+                const nodes = previewModal.value.nodes
+                const batchSize = 3
+                for (let i = 0; i < nodes.length; i += batchSize) {
+                    const batch = nodes.slice(i, i + batchSize)
+                    await Promise.all(batch.map(n => testNodeLatency(n)))
+                }
+                testingAll.value = false
+            }
+
+            const getLatencyClass = (ms) => {
+                if (ms === undefined) return ''
+                if (ms === -1) return 'badge-error text-white'
+                if (ms < 100) return 'badge-success text-white'
+                if (ms < 400) return 'badge-warning'
+                return 'badge-error text-white'
             }
 
             const copyAllNodes = () => {
@@ -528,7 +701,9 @@
                 exportData, importData, canSort, getAlertClass, getProgressClass, getTextColorClass, isExpired,
                 previewNodes, previewModal, previewLoading, copyAllNodes,
                 refreshAll, refreshingAll,
-                loadNodesForSelection, selectionLoading, selectionNodes, selectAllNodes
+                loadNodesForSelection, selectionLoading, selectionNodes, selectAllNodes,
+                // New Exports
+                testNodeLatency, testAllNodes, testingAll, getLatencyClass
             }
         }
     }).mount('#app')

@@ -3,17 +3,13 @@ import { handle } from 'hono/cloudflare-pages'
 
 const app = new Hono()
 
-// 安全的 Base64 解码，失败返回 null
+// --- 辅助函数 ---
 const safeAtob = (str) => {
   try {
-    // 移除空白字符
     const clean = str.replace(/\s/g, '')
-    // 处理 URL safe 字符
     const base64 = clean.replace(/-/g, '+').replace(/_/g, '/')
     return atob(base64)
-  } catch (e) {
-    return null
-  }
+  } catch (e) { return null }
 }
 
 const safeBtoa = (str) => {
@@ -22,22 +18,29 @@ const safeBtoa = (str) => {
   ));
 }
 
-// 解析单个节点并提取名称 (用于比对白名单)
+// 带重试机制的 Fetch
+const fetchWithRetry = async (url, options = {}, retries = 2) => {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const res = await fetch(url, options)
+      if (res.ok) return res
+      // 如果是 404 或 401 这种明确的错误，就不重试了
+      if (res.status === 404 || res.status === 401) return res
+    } catch (err) {
+      if (i === retries) throw err
+    }
+  }
+}
+
 const parseNodeName = (link) => {
   const trimLink = link.trim()
   if (!trimLink) return null
-  
-  // 1. 处理 vmess
   if (trimLink.startsWith('vmess://')) {
     try {
-      const b64 = trimLink.substring(8).replace(/-/g, '+').replace(/_/g, '/')
-      const config = JSON.parse(atob(b64))
+      const config = JSON.parse(safeAtob(trimLink.substring(8)))
       return config.ps || ''
     } catch (e) { return '' }
   } 
-  
-  // 2. 处理其他协议 (vless, hysteria2, trojan 等)
-  // 格式通常是 protocol://...#备注
   const hashIndex = trimLink.lastIndexOf('#')
   if (hashIndex !== -1) {
     try { return decodeURIComponent(trimLink.substring(hashIndex + 1)) } catch (e) { return trimLink.substring(hashIndex + 1) }
@@ -53,27 +56,32 @@ app.get('/', async (c) => {
       "SELECT * FROM subscriptions WHERE status = 1 ORDER BY sort_order ASC, id DESC"
     ).all()
 
-    let allNodes = []
+    // 使用 Set 来存储节点，自动去重
+    let uniqueNodes = new Set()
+    // 保持顺序的数组
+    let orderedNodes = []
 
     for (const sub of results) {
-      // 1. 获取自选白名单
+      let params = {}
+      try { params = sub.params ? JSON.parse(sub.params) : {} } catch(e) {}
+      
+      // 1. 获取白名单和自定义 UA
       let allowedNodes = null
-      try {
-        const params = sub.params ? JSON.parse(sub.params) : {}
-        if (params.include && Array.isArray(params.include) && params.include.length > 0) {
-          allowedNodes = new Set(params.include)
-        }
-      } catch(e) {}
+      if (params.include && Array.isArray(params.include) && params.include.length > 0) {
+        allowedNodes = new Set(params.include)
+      }
+      
+      const userAgent = params.ua || 'v2rayNG/1.8.5' // 优先使用自定义UA
 
       let rawContent = ""
 
-      // 2. 获取原始内容 (无论是 URL 下载的还是直接填写的)
+      // 2. 获取内容
       if (sub.type === 'node') {
         rawContent = sub.url
       } else {
         try {
-          const response = await fetch(sub.url, { headers: { 'User-Agent': 'v2rayNG/1.8.5' } })
-          if (response.ok) {
+          const response = await fetchWithRetry(sub.url, { headers: { 'User-Agent': userAgent } })
+          if (response && response.ok) {
             rawContent = await response.text()
           }
         } catch (err) {
@@ -83,33 +91,35 @@ app.get('/', async (c) => {
 
       if (!rawContent) continue
 
-      // 3. 解析内容为行列表
-      // 尝试 Base64 解码，如果失败(返回null)则认为原文就是明文列表
+      // 3. 解析与筛选
       const decoded = safeAtob(rawContent)
       const contentToSplit = decoded !== null ? decoded : rawContent
-      
       const lines = contentToSplit.split(/\r?\n/).filter(line => line.trim() !== '')
       
-      // 4. 遍历每一行(每一个节点)进行筛选
       for (const line of lines) {
         const link = line.trim()
         if (!link) continue
 
+        // 筛选逻辑
+        let keep = true
         if (allowedNodes) {
-            // 如果启用了白名单，提取名字进行比对
             const name = parseNodeName(link)
-            // 如果名字存在且在白名单里，或者是白名单里的原始链接(防止重名匹配错误)，则保留
-            if (name && allowedNodes.has(name)) {
-                allNodes.push(link)
+            if (!name || !allowedNodes.has(name)) {
+                keep = false
             }
-        } else {
-            // 没有白名单，全部保留
-            allNodes.push(link)
+        }
+
+        // 去重并添加
+        if (keep) {
+            if (!uniqueNodes.has(link)) {
+                uniqueNodes.add(link)
+                orderedNodes.push(link)
+            }
         }
       }
     }
 
-    const finalString = allNodes.join('\n')
+    const finalString = orderedNodes.join('\n')
     const base64Result = safeBtoa(finalString)
 
     return c.text(base64Result)

@@ -353,7 +353,6 @@
     const { createApp, ref, onMounted, computed, nextTick, watch } = Vue
     const API_BASE = '/api'
 
-    // 默认模板常量（用于重置）
     const DEFAULT_TEMPLATE = `port: 7890
 socks-port: 7891
 mixed-port: 7892
@@ -445,18 +444,74 @@ rules:
             const form = ref({ name: '', url: '', params: { include: [], ua: '' } }) 
             const selectionLoading = ref(false); const selectionNodes = ref([])
             const showSettingsModal = ref(false); const settings = ref({}); const settingsForm = ref({}); const toast = ref({ show: false, message: '', type: 'success' })
-            const domain = window.location.origin; const qrModal = ref({ show: false, title: '', url: '' })
+            const qrModal = ref({ show: false, title: '', url: '' })
             const checking = ref(false); const checkResult = ref(null); let sortableInstance = null
             const refreshingAll = ref(false); const previewModal = ref({ show: false, nodes: [] }); const previewLoading = ref(false)
             let trafficChartInstance = null; let usageChartInstance = null
             
-            // Template Logic
+            // Template
             const showTemplateModal = ref(false)
             const templateContent = ref('')
             const templateSaving = ref(false)
-            const templateTab = ref('edit') // 'edit' or 'preview'
+            const templateTab = ref('edit')
             const previewContent = ref('')
 
+            // MISSING COMPUTED PROPERTIES RESTORED
+            const filteredItems = computed(() => {
+                let res = items.value
+                if (filterType.value !== 'all') {
+                    res = res.filter(i => i.type === filterType.value)
+                }
+                if (searchText.value) {
+                    const lower = searchText.value.toLowerCase()
+                    res = res.filter(i => i.name.toLowerCase().includes(lower) || i.url.toLowerCase().includes(lower))
+                }
+                return res
+            })
+
+            const subCount = computed(() => items.value.filter(i => i.type === 'subscription').length)
+            const nodeCount = computed(() => items.value.filter(i => i.type === 'node').length)
+            const canSort = computed(() => searchText.value === '' && filterType.value === 'all')
+
+            // MISSING HELPER FUNCTIONS RESTORED
+            const getFlagEmoji = (countryCode) => {
+                if (!countryCode) return '🌐'
+                const codePoints = countryCode
+                    .toUpperCase()
+                    .split('')
+                    .map(char =>  127397 + char.charCodeAt(0));
+                return String.fromCodePoint(...codePoints);
+            }
+
+            const isExpired = (timestamp) => {
+                if (!timestamp) return false;
+                return Date.now() > timestamp * 1000;
+            }
+
+            const getAlertClass = (item) => {
+                if (item.status === 0) return 'opacity-50 grayscale'
+                if (item.info && item.info.stats && isExpired(item.info.stats.raw_expire)) return 'border-error-custom'
+                return ''
+            }
+
+            const getProgressClass = (percent) => {
+                if (percent > 90) return 'progress-error'
+                if (percent > 75) return 'progress-warning'
+                return 'progress-primary'
+            }
+
+            const getTextColorClass = (percent) => {
+                if (percent > 90) return 'text-error'
+                if (percent > 75) return 'text-warning'
+                return 'text-success'
+            }
+
+            const copyLink = (type) => {
+               const url = window.location.origin + '/subscribe?token=' + localStorage.getItem('biaosub_token');
+               copyToClip(url)
+            }
+
+            // Core Logic
             const authFetch = async (url, options = {}) => {
                 const token = localStorage.getItem('biaosub_token')
                 options.headers = { 'Content-Type': 'application/json', 'Authorization': token || '', ...options.headers }
@@ -465,9 +520,38 @@ rules:
                 return res
             }
 
-            const handleLogin = async () => { if (!loginPassword.value) return; loginLoading.value = true; loginError.value = ''; try { const res = await fetch(`${API_BASE}/login`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({password: loginPassword.value}) }); const data = await res.json(); if (data.success) { localStorage.setItem('biaosub_token', loginPassword.value); isLoggedIn.value = true; loginPassword.value = ''; showToast('欢迎回来'); initData() } else { loginError.value = data.error } } catch (e) { loginError.value = '网络连接失败' } finally { loginLoading.value = false } }
+            const handleLogin = async () => { 
+                if (!loginPassword.value) return; 
+                loginLoading.value = true; 
+                loginError.value = ''; 
+                try { 
+                    const res = await fetch(`${API_BASE}/login`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({password: loginPassword.value}) }); 
+                    const data = await res.json(); 
+                    if (data.success) { 
+                        localStorage.setItem('biaosub_token', loginPassword.value); 
+                        isLoggedIn.value = true; 
+                        loginPassword.value = ''; 
+                        showToast('欢迎回来'); 
+                        initData() 
+                    } else { 
+                        loginError.value = data.error 
+                    } 
+                } catch (e) { 
+                    loginError.value = '网络连接失败' 
+                } finally { 
+                    loginLoading.value = false 
+                } 
+            }
+
             const logout = () => { localStorage.removeItem('biaosub_token'); isLoggedIn.value = false; items.value = [] }
-            const checkLoginStatus = () => { if (localStorage.getItem('biaosub_token')) { isLoggedIn.value = true; initData() } }
+            
+            const checkLoginStatus = () => { 
+                if (localStorage.getItem('biaosub_token')) { 
+                    isLoggedIn.value = true; 
+                    initData() 
+                } 
+            }
+            
             const initData = () => { fetchItems(); fetchSettings() }
             
             const fetchItems = async () => {
@@ -508,31 +592,33 @@ rules:
                         subNames.push(item.name); subUsage.push(used)
                     }
                 })
-                const ctxTraffic = document.getElementById('trafficChart')
-                if (ctxTraffic) {
+                
+                const elTraffic = document.getElementById('trafficChart')
+                if (elTraffic) {
                     if (trafficChartInstance) trafficChartInstance.destroy()
-                    trafficChartInstance = new Chart(ctxTraffic, {
+                    trafficChartInstance = new Chart(elTraffic, {
                         type: 'doughnut',
                         data: { labels: ['已用流量', '剩余流量'], datasets: [{ data: hasTotalData ? [totalUsed, Math.max(0, totalAvailable - totalUsed)] : [0, 1], backgroundColor: ['#ec4899', '#334155'], borderWidth: 0 }] },
                         options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: '#94a3b8' } } }, cutout: '70%' }
                     })
                 }
-                const ctxUsage = document.getElementById('usageChart')
-                if (ctxUsage) {
+                
+                const elUsage = document.getElementById('usageChart')
+                if (elUsage) {
                     if (usageChartInstance) usageChartInstance.destroy()
                     const combined = subNames.map((name, i) => ({ name, usage: subUsage[i] }))
                     combined.sort((a, b) => b.usage - a.usage)
                     const top5 = combined.slice(0, 5)
-                    usageChartInstance = new Chart(ctxUsage, {
+                    usageChartInstance = new Chart(elUsage, {
                         type: 'bar',
                         data: { labels: top5.map(i => i.name), datasets: [{ label: '已用 (GB)', data: top5.map(i => (i.usage / 1024 / 1024 / 1024).toFixed(2)), backgroundColor: '#6366f1', borderRadius: 4 }] },
                         options: { responsive: true, maintainAspectRatio: false, indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: { grid: { color: '#334155' }, ticks: { color: '#94a3b8' } }, y: { grid: { display: false }, ticks: { color: '#cbd5e1' } } } }
                     })
                 }
             }
+            
             watch(items, () => { nextTick(initCharts) }, { deep: true })
 
-            const canSort = computed(() => searchText.value === '' && filterType.value === 'all')
             const initSortable = () => {
                 const el = document.getElementById('sortable-list')
                 if (!el) return
@@ -595,7 +681,20 @@ rules:
 
             const fetchSettings = async () => { try { const res = await authFetch(`${API_BASE}/settings`); const data = await res.json(); if (data.success && data.data) { settings.value = data.data; settingsForm.value = { ...data.data } } } catch (e) {} }
             const saveSettings = async () => { submitting.value=true; try { await authFetch(`${API_BASE}/settings`, { method: 'POST', body: JSON.stringify(settingsForm.value) }); showToast('设置已保存'); settings.value = { ...settingsForm.value }; showSettingsModal.value = false } catch(e){showToast('失败','error')} finally{submitting.value=false} }
-            const checkUrl = async () => { if (!form.value.url) return showToast('请输入链接', 'error'); checking.value = true; checkResult.value = null; try { const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: form.value.url, type: activeTab.value, ua: form.value.params.ua }) }); const data = await res.json(); if (data.success) { checkResult.value = { success: true, message: '连接成功', ...data.data } } else { checkResult.value = { success: false, message: data.error || '连接失败' } } } catch (e) { checkResult.value = { success: false, message: '请求失败' } } finally { checking.value = false } }
+            
+            const checkUrl = async () => { 
+                if (!form.value.url) return showToast('请输入链接', 'error'); 
+                checking.value = true; 
+                checkResult.value = null; 
+                try { 
+                    const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: form.value.url, type: activeTab.value, ua: form.value.params.ua }) }); 
+                    const data = await res.json(); 
+                    if (data.success) { checkResult.value = { success: true, message: '连接成功', ...data.data } } 
+                    else { checkResult.value = { success: false, message: data.error || '连接失败' } } 
+                } catch (e) { checkResult.value = { success: false, message: '请求失败' } } 
+                finally { checking.value = false } 
+            }
+            
             const refreshItem = async (item) => { item.refreshing = true; try { const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type, ua: item.params ? item.params.ua : '' }) }); const data = await res.json(); if (data.success) { item.info = data.data; item.updated_at = new Date().toISOString(); await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({ info: data.data }) }); showToast('刷新成功') } else { showToast(data.error || '刷新失败', 'error') } } catch (e) { showToast('网络错误', 'error') } finally { item.refreshing = false } }
             
             const saveItem = async () => { 
@@ -621,6 +720,7 @@ rules:
             const toggleStatus = async (item) => { item.status = item.status === 1 ? 0 : 1; await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({status: item.status}) }) }
             const copyToClip = (text) => navigator.clipboard.writeText(text).then(() => showToast('已复制'))
             const showQr = async (item) => { qrModal.value = { show: true, title: item.name, url: item.url }; await nextTick(); setTimeout(() => { const c = document.getElementById('qr-canvas'); if(c) new QRious({ element: c, value: item.url, size: 200, level: 'H' }) }, 100) }
+            const showToast = (msg, type = 'success') => { toast.value = { show: true, message: msg, type }; setTimeout(() => toast.value.show = false, 3000) }
             
             const openModal = (item) => { 
                 checkResult.value=null; selectionNodes.value = []; 
@@ -637,7 +737,7 @@ rules:
                 showModal.value=true 
             }
 
-            // Template Logic (Enhanced)
+            // Template Logic
             const openTemplateModal = async () => {
                 showTemplateModal.value = true; templateTab.value = 'edit'; templateContent.value = 'Loading...'
                 try {
@@ -683,6 +783,24 @@ rules:
             }
             
             const copyPreview = () => { copyToClip(previewContent.value) }
+            const exportData = () => {
+                const data = { items: items.value, settings: settings.value }
+                const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'})
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a'); a.href = url; a.download = 'biaosub_backup.json'; a.click()
+            }
+            const importData = async (e) => {
+                const file = e.target.files[0]; if (!file) return
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    try {
+                         const data = JSON.parse(e.target.result);
+                         if (data.items) await authFetch(`${API_BASE}/backup/import`, { method: 'POST', body: JSON.stringify({ items: data.items }) })
+                         if (data.settings) await authFetch(`${API_BASE}/settings`, { method: 'POST', body: JSON.stringify(data.settings) })
+                         showToast('导入成功'); fetchItems()
+                    } catch(e) { showToast('导入失败: 格式错误', 'error') }
+                }; reader.readAsText(file)
+            }
 
             const saveTemplate = async () => {
                 templateSaving.value = true
@@ -697,6 +815,11 @@ rules:
             const openSettings = () => { settingsForm.value = { ...settings.value }; showSettingsModal.value = true }
             const editItem = (i) => openModal(i)
             
+            // 关键修复：添加生命周期钩子
+            onMounted(() => {
+                checkLoginStatus()
+            })
+
             return { 
                 isLoggedIn, loginPassword, loginLoading, loginError, handleLogin, logout,
                 items, filteredItems, loading, submitting, subCount, nodeCount, searchText, filterType,

@@ -113,7 +113,7 @@ const parseNodes = (text) => {
 
 // --- API 路由 ---
 
-// 1. 检测链接 / 获取节点列表
+// 1. 检测链接
 app.post('/check', async (c) => {
   try {
     const { url, type, needNodes, ua } = await c.req.json()
@@ -122,15 +122,12 @@ app.post('/check', async (c) => {
     let resultData = { valid: false, nodeCount: 0, stats: null, location: null, nodes: [] }
     const userAgent = ua || 'v2rayNG/1.8.5'
 
-    // >>> 场景1：自建节点
     if (type === 'node') {
       const nodeList = parseNodes(url)
       if (nodeList.length === 0) return c.json({ success: false, error: '未检测到有效节点' })
-      
       resultData.valid = true
       resultData.nodeCount = nodeList.length
       if (needNodes) resultData.nodes = nodeList
-
       try {
         const firstLink = nodeList[0].link
         if (firstLink) {
@@ -141,20 +138,16 @@ app.post('/check', async (c) => {
            if (host) resultData.location = await getGeoInfo(host)
         }
       } catch(e) {}
-
       return c.json({ success: true, data: resultData })
     }
 
-    // >>> 场景2：机场订阅
     const [clashRes, v2rayRes] = await Promise.all([
       fetchWithRetry(url, { headers: { 'User-Agent': 'Clash/1.0' } }).catch(e => null),
       fetchWithRetry(url, { headers: { 'User-Agent': userAgent } }).catch(e => null)
     ])
-    
     const validRes = clashRes || v2rayRes
     if (!validRes || !validRes.ok) return c.json({ success: false, error: `连接失败` })
 
-    // 解析流量信息
     const infoHeader = (clashRes && clashRes.headers.get('subscription-userinfo')) || (v2rayRes && v2rayRes.headers.get('subscription-userinfo'))
     if (infoHeader) {
       const info = {}
@@ -176,7 +169,6 @@ app.post('/check', async (c) => {
       }
     }
 
-    // 解析节点内容
     const text = (v2rayRes && v2rayRes.ok) ? await v2rayRes.text() : await clashRes.text()
     const nodeList = parseNodes(text)
     
@@ -191,7 +183,7 @@ app.post('/check', async (c) => {
   }
 })
 
-// CRUD 接口 (保持一致)
+// CRUD
 app.get('/subs', async (c) => {
   if (!c.env.DB) return c.json({ error: 'DB未绑定' }, 500)
   const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all()
@@ -256,6 +248,7 @@ app.post('/backup/import', async (c) => {
   try { await c.env.DB.batch(batch); return c.json({ success: true }) } catch(e) { return c.json({ success: false, error: e.message }) }
 })
 
+// Settings
 app.get('/settings', async (c) => {
   const { results } = await c.env.DB.prepare("SELECT key, value FROM settings").all()
   const settings = {}
@@ -270,6 +263,25 @@ app.post('/settings', async (c) => {
   await c.env.DB.batch(batch)
   return c.json({ success: true })
 })
+
+// --- Template CRUD (新增) ---
+app.get('/template/default', async (c) => {
+    const { results } = await c.env.DB.prepare("SELECT content FROM templates WHERE is_default = 1 LIMIT 1").all()
+    if (results.length > 0) {
+        return c.json({ success: true, data: results[0].content })
+    } else {
+        return c.json({ success: false, error: 'No default template found' })
+    }
+})
+
+app.post('/template/default', async (c) => {
+    const { content } = await c.req.json()
+    // 更新默认模板，假设 ID 1 是默认，或者通过 is_default 查找
+    // 简单起见，我们更新所有 is_default=1 的（通常只有一个）
+    await c.env.DB.prepare("UPDATE templates SET content = ? WHERE is_default = 1").bind(content).run()
+    return c.json({ success: true })
+})
+
 app.post('/login', async (c) => {
   const { password } = await c.req.json()
   return (password === c.env.ADMIN_PASSWORD) ? c.json({ success: true }) : c.json({ success: false, error: '密码错误' }, 401)

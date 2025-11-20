@@ -36,22 +36,19 @@ const formatDate = (timestamp) => {
   return date.toLocaleDateString()
 }
 
-// 获取 IP 地理位置 (入口IP)
+// 获取 IP 地理位置
 const getGeoInfo = async (host) => {
   try {
-    // 如果 host 是域名，ip-api 会自动解析
     const res = await fetch(`http://ip-api.com/json/${host}?fields=status,country,countryCode,query`)
     const data = await res.json()
     if (data.status === 'success') {
       return { country: data.country, code: data.countryCode, ip: data.query }
     }
-  } catch (e) {
-    console.error('Geo check failed', e)
-  }
+  } catch (e) {}
   return null
 }
 
-// --- 检测接口 (核心升级) ---
+// --- 检测接口 (修复计数逻辑) ---
 app.post('/check', async (c) => {
   try {
     const { url, type } = await c.req.json()
@@ -60,27 +57,23 @@ app.post('/check', async (c) => {
     let resultData = {
       valid: false,
       nodeCount: 0,
-      stats: null,  // 流量信息
-      location: null // 地理位置
+      stats: null,
+      location: null
     }
 
-    // >>> 场景1：自建节点 (单行或多行)
+    // >>> 场景1：自建节点
     if (type === 'node') {
       const lines = url.split('\n').filter(l => l.trim().length > 0)
+      const regex = /^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//
       let validCount = 0
       let firstHost = ''
-
-      // 支持的协议列表
-      const regex = /^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//
 
       for (const line of lines) {
         if (line.match(regex)) {
           validCount++
-          // 尝试提取域名/IP用于检测位置 (粗略提取)
           if (!firstHost) {
             try {
               const temp = line.split('://')[1]
-              // 针对 user@host:port 或 host:port 格式
               const atPart = temp.split('@')
               const addressPart = atPart.length > 1 ? atPart[1] : atPart[0]
               firstHost = addressPart.split(':')[0].split('/')[0].split('?')[0]
@@ -89,23 +82,23 @@ app.post('/check', async (c) => {
         }
       }
 
-      if (validCount === 0) {
-        return c.json({ success: false, error: '未检测到有效节点链接 (支持 vmess/vless/ss/hysteria2 等)' })
-      }
-
+      if (validCount === 0) return c.json({ success: false, error: '未检测到有效节点链接' })
+      
       resultData.valid = true
       resultData.nodeCount = validCount
-      
-      // 获取第一个节点的地理位置
-      if (firstHost) {
-        resultData.location = await getGeoInfo(firstHost)
-      }
+      if (firstHost) resultData.location = await getGeoInfo(firstHost)
       
       return c.json({ success: true, data: resultData })
     }
 
-    // >>> 场景2：机场订阅
-    const res = await fetch(url, { headers: { 'User-Agent': 'Clash/1.0' } })
+    // >>> 场景2：机场订阅 (核心修改)
+    // 使用 v2rayNG User-Agent，强制获取 Base64 格式，避免获取到难以解析的 Clash YAML
+    const res = await fetch(url, { 
+      headers: { 
+        'User-Agent': 'v2rayNG/1.8.5' 
+      } 
+    })
+
     if (!res.ok) return c.json({ success: false, error: `HTTP ${res.status}` })
 
     // 解析流量头
@@ -127,23 +120,40 @@ app.post('/check', async (c) => {
       }
     }
 
-    // 智能解析节点数
+    // 解析节点数 (增强版)
     const text = await res.text()
-    // 尝试 Base64 解码
+    
     try {
-      const decoded = atob(text.replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, ''))
-      // 只有包含协议头的行才算节点
-      resultData.nodeCount = decoded.split('\n').filter(line => line.includes('://')).length
+        // 1. 尝试 Base64 解码 (先去除所有空格和换行，防止解码失败)
+        const cleanText = text.replace(/\s/g, '')
+        const decoded = atob(cleanText.replace(/-/g, '+').replace(/_/g, '/'))
+        
+        // 2. 解码成功，按行分割并计数
+        // 过滤掉空行，且必须包含协议头 (://) 或者是 ss:// 这种
+        resultData.nodeCount = decoded.split('\n')
+            .map(line => line.trim())
+            .filter(line => line && line.match(/^[a-z0-9]+:\/\//i))
+            .length
+            
     } catch (e) {
-      // 可能是 Clash YAML 或明文
-      const lines = text.split('\n')
-      // 简单统计 proxies 数量或行数
-      if (text.includes('proxies:')) {
-        // 粗略估算 yaml 列表项
-        resultData.nodeCount = lines.filter(l => l.trim().startsWith('- name:')).length
-      } else {
-        resultData.nodeCount = lines.filter(line => line.includes('://')).length
-      }
+        // 3. 如果解码失败 (说明可能是明文列表，或者机场强制返回了 YAML)
+        console.log('Base64 decode failed, trying text mode')
+        
+        // 尝试直接按行统计链接
+        const linkCount = text.split('\n')
+            .filter(line => line.trim().match(/^[a-z0-9]+:\/\//i))
+            .length
+            
+        if (linkCount > 0) {
+            resultData.nodeCount = linkCount
+        } else {
+            // 4. 最后尝试匹配 YAML 格式 (以防万一)
+            // 统计 "- name:" 的出现次数
+            const yamlMatches = text.match(/^\s*-\s*(name:|{\s*name:)/gm)
+            if (yamlMatches) {
+                resultData.nodeCount = yamlMatches.length
+            }
+        }
     }
     
     resultData.valid = true
@@ -154,16 +164,13 @@ app.post('/check', async (c) => {
   }
 })
 
-// --- 列表 CRUD (升级 info 字段) ---
+// --- 列表 CRUD ---
 
 app.get('/subs', async (c) => {
   if (!c.env.DB) return c.json({ error: 'DB未绑定' }, 500)
-  // 读取时解析 info JSON
   const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY created_at DESC").all()
   const data = results.map(item => {
-    try {
-      item.info = item.info ? JSON.parse(item.info) : null
-    } catch(e) { item.info = null }
+    try { item.info = item.info ? JSON.parse(item.info) : null } catch(e) { item.info = null }
     return item
   })
   return c.json({ success: true, data })
@@ -171,11 +178,8 @@ app.get('/subs', async (c) => {
 
 app.post('/subs', async (c) => {
   const { name, url, type, info } = await c.req.json()
-  // 存入前将 info 对象转为 JSON 字符串
   const infoStr = info ? JSON.stringify(info) : null
-  const { success } = await c.env.DB.prepare(
-    "INSERT INTO subscriptions (name, url, type, info) VALUES (?, ?, ?, ?)"
-  ).bind(name, url, type || 'subscription', infoStr).run()
+  const { success } = await c.env.DB.prepare("INSERT INTO subscriptions (name, url, type, info) VALUES (?, ?, ?, ?)").bind(name, url, type || 'subscription', infoStr).run()
   return success ? c.json({ success: true }) : c.json({ success: false }, 500)
 })
 
@@ -183,19 +187,13 @@ app.put('/subs/:id', async (c) => {
   const id = c.req.param('id')
   const body = await c.req.json()
   const { name, url, status, type, info } = body
-  
   let query = "UPDATE subscriptions SET updated_at = CURRENT_TIMESTAMP"
   const params = []
-  
   if (name !== undefined) { query += ", name = ?"; params.push(name); }
   if (url !== undefined) { query += ", url = ?"; params.push(url); }
   if (status !== undefined) { query += ", status = ?"; params.push(status); }
   if (type !== undefined) { query += ", type = ?"; params.push(type); }
-  if (info !== undefined) { 
-    query += ", info = ?"; 
-    params.push(info ? JSON.stringify(info) : null); 
-  }
-
+  if (info !== undefined) { query += ", info = ?"; params.push(info ? JSON.stringify(info) : null); }
   query += " WHERE id = ?"
   params.push(id)
   await c.env.DB.prepare(query).bind(...params).run()
@@ -214,6 +212,7 @@ app.get('/settings', async (c) => {
   results.forEach(row => { settings[row.key] = row.value })
   return c.json({ success: true, data: settings })
 })
+
 app.post('/settings', async (c) => {
   const body = await c.req.json()
   const stmt = c.env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)")
@@ -222,6 +221,7 @@ app.post('/settings', async (c) => {
   await c.env.DB.batch(batch)
   return c.json({ success: true })
 })
+
 app.post('/login', async (c) => {
   const { password } = await c.req.json()
   return (password === c.env.ADMIN_PASSWORD) ? c.json({ success: true }) : c.json({ success: false, error: '密码错误' }, 401)

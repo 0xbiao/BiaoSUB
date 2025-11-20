@@ -297,10 +297,7 @@
             const checking = ref(false); const checkResult = ref(null)
             let sortableInstance = null
             
-            // 一键更新状态
             const refreshingAll = ref(false)
-
-            // 预览模态框状态
             const previewModal = ref({ show: false, nodes: [] })
             const previewLoading = ref(false)
 
@@ -342,12 +339,10 @@
             }
             watch([searchText, filterType], () => { if(sortableInstance) sortableInstance.option("disabled", !canSort.value) })
 
-            // 预览功能
             const previewNodes = async (item) => {
                 previewModal.value = { show: true, nodes: [] }
                 previewLoading.value = true
                 try {
-                    // 请求后端解析，带上 needNodes 参数
                     const res = await authFetch(`${API_BASE}/check`, { 
                         method: 'POST', 
                         body: JSON.stringify({ url: item.url, type: item.type, needNodes: true }) 
@@ -371,20 +366,14 @@
                 copyToClip(links)
             }
             
-            // --- 核心：一键更新所有订阅 ---
             const refreshAll = async () => {
                 if (refreshingAll.value) return
                 if (!confirm('确定要更新所有订阅吗？这可能需要一些时间。')) return
-                
                 refreshingAll.value = true
-                const subs = items.value.filter(i => i.type === 'subscription') // 只更新订阅类型，排除单节点
+                const subs = items.value.filter(i => i.type === 'subscription')
                 let successCount = 0
-                
                 for (const item of subs) {
-                    // 复用 refreshItem 的逻辑，但为了避免并发太高卡死浏览器，我们使用 await 顺序执行
-                    // 如果想并发可以改为 Promise.all，但容易触发后端超时或请求限制
                     try {
-                        // 这里手动调用 refreshItem 里的逻辑，因为 refreshItem 是绑定在 UI 按钮上的
                         item.refreshing = true
                         const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type }) })
                         const data = await res.json()
@@ -394,17 +383,14 @@
                             successCount++
                         }
                     } catch (e) {
-                        console.error(e)
                     } finally {
                         item.refreshing = false
                     }
                 }
-                
                 refreshingAll.value = false
                 showToast(`更新完成，成功刷新 ${successCount} 个订阅`)
             }
 
-            // 其他通用函数
             const fetchSettings = async () => { try { const res = await authFetch(`${API_BASE}/settings`); const data = await res.json(); if (data.success && data.data) { settings.value = data.data; settingsForm.value = { ...data.data } } } catch (e) {} }
             const saveSettings = async () => { submitting.value=true; try { await authFetch(`${API_BASE}/settings`, { method: 'POST', body: JSON.stringify(settingsForm.value) }); showToast('设置已保存'); settings.value = { ...settingsForm.value }; showSettingsModal.value = false } catch(e){showToast('失败','error')} finally{submitting.value=false} }
             const checkUrl = async () => { if (!form.value.url) return showToast('请输入链接', 'error'); checking.value = true; checkResult.value = null; try { const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: form.value.url, type: activeTab.value }) }); const data = await res.json(); if (data.success) { checkResult.value = { success: true, message: '连接成功', ...data.data } } else { checkResult.value = { success: false, message: data.error || '连接失败' } } } catch (e) { checkResult.value = { success: false, message: '请求失败' } } finally { checking.value = false } }
@@ -440,9 +426,7 @@
                 saveItem, deleteItem, toggleStatus, openModal, editItem, openSettings, saveSettings, showQr,
                 toast, copyLink, copyToClip, checkUrl, checking, checkResult, refreshItem, getFlagEmoji,
                 exportData, importData, canSort, getAlertClass, getProgressClass, getTextColorClass, isExpired,
-                // 预览相关
                 previewNodes, previewModal, previewLoading, copyAllNodes,
-                // 新增：一键更新相关
                 refreshAll, refreshingAll
             }
         }

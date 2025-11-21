@@ -501,9 +501,9 @@ rules:
                 return 'text-success'
             }
 
-            // --- 修复后的复制链接函数 ---
             const copyLink = (target) => {
-               const rawUrl = window.location.origin + '/subscribe?token=' + (localStorage.getItem('biaosub_token') || '');
+               // 修改点：路径改为 /api/subscribe
+               const rawUrl = window.location.origin + '/api/subscribe?token=' + (localStorage.getItem('biaosub_token') || '');
                
                if (!target) {
                    copyToClip(rawUrl);

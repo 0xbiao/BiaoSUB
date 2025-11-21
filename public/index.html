@@ -90,17 +90,9 @@
                         <div class="text-xs text-slate-500 mt-1"><span class="badge badge-xs badge-outline badge-emerald">自动重试 & 去重</span></div>
                     </div>
                     <div class="relative z-20 mt-auto">
-                        <div class="dropdown dropdown-top dropdown-end w-full">
-                            <label tabindex="0" class="btn btn-block bg-emerald-500 hover:bg-emerald-600 text-white border-none shadow-lg">
-                                <i class="fa-solid fa-share-nodes mr-2"></i> 复制订阅链接
-                            </label>
-                            <ul tabindex="0" class="dropdown-content z-[100] menu p-2 shadow-2xl bg-slate-800 rounded-box w-72 border border-slate-600 mb-2">
-                                <li class="menu-title text-slate-400">选择格式</li>
-                                <li><a @click="copyLink('clash')" class="text-slate-200 hover:bg-slate-700"><i class="fa-solid fa-cat text-orange-400 w-5"></i> Clash 订阅</a></li>
-                                <div class="divider my-1"></div>
-                                <li class="text-xs text-slate-500 px-4 py-1">转换后端: {{ settings.sub_converter_url ? '自定义' : '默认' }}</li>
-                            </ul>
-                        </div>
+                        <button @click="copyLink()" class="btn btn-block bg-emerald-500 hover:bg-emerald-600 text-white border-none shadow-lg">
+                            <i class="fa-solid fa-share-nodes mr-2"></i> 复制 Clash 订阅
+                        </button>
                     </div>
                 </div>
             </div>
@@ -324,7 +316,7 @@
             <div class="modal-box bg-slate-800 border border-slate-700">
                 <h3 class="font-bold text-lg text-white mb-6 flex items-center"><i class="fa-solid fa-sliders mr-2 text-accent"></i> 全局设置</h3>
                 <div class="flex flex-col gap-5">
-                    <div class="form-control w-full"><label class="label"><span class="label-text text-slate-300 font-bold">转换服务地址</span></label><input type="text" v-model="settingsForm.sub_converter_url" placeholder="默认公共服务" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-accent" /></div>
+                    <div class="form-control w-full"><label class="label"><span class="label-text text-slate-300 font-bold">转换服务地址 (已废弃，使用内置)</span></label><input type="text" disabled placeholder="内置转换服务" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-accent opacity-50" /></div>
                     <div class="form-control w-full"><label class="label"><span class="label-text text-slate-300 font-bold">服务密钥 (Token)</span></label><input type="password" v-model="settingsForm.sub_converter_token" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-accent" /></div>
                     <div class="form-control w-full"><label class="label"><span class="label-text text-slate-300 font-bold">User-Agent</span></label><input type="text" v-model="settingsForm.user_agent" placeholder="v2rayNG/1.8.5" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-accent" /></div>
                     <div class="divider text-slate-500 text-xs">数据备份与恢复</div>
@@ -501,23 +493,14 @@ rules:
                 return 'text-success'
             }
 
-            const copyLink = (target) => {
-               // 修改点：路径改为 /api/subscribe
-               const rawUrl = window.location.origin + '/api/subscribe?token=' + (localStorage.getItem('biaosub_token') || '');
-               
-               if (!target) {
-                   copyToClip(rawUrl);
-                   return;
-               }
-
-               let converter = settings.value.sub_converter_url || 'https://api.v1.mk/sub';
-               if (!converter.startsWith('http')) converter = 'https://' + converter;
-               converter = converter.replace(/\/$/, '');
-
-               const convertedUrl = `${converter}?target=${target}&url=${encodeURIComponent(rawUrl)}&insert=false&config=${encodeURIComponent(settings.value.sub_config || '')}&emoji=true&list=false&tfo=false&scv=true&fdn=false&sort=false&new_name=true`;
-               
-               copyToClip(convertedUrl);
-               showToast(`已复制 ${target} 订阅链接`);
+            // --- 极简版复制函数 (直接指向内置后端) ---
+            const copyLink = () => {
+               // 获取当前 Token
+               const token = localStorage.getItem('biaosub_token') || '';
+               // 生成直接地址
+               const clashUrl = `${window.location.origin}/api/subscribe/clash?token=${token}`;
+               copyToClip(clashUrl);
+               showToast('已复制 Clash 订阅链接 (内置转换)');
             }
 
             const authFetch = async (url, options = {}) => {

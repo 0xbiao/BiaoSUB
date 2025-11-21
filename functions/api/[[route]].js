@@ -8,7 +8,10 @@ app.use('/*', cors())
 
 // --- 鉴权中间件 ---
 app.use('/*', async (c, next) => {
-  if (c.req.path.endsWith('/login')) return await next()
+  const path = c.req.path
+  // 放行登录接口和订阅接口 (订阅接口会在内部通过 token 验证)
+  if (path.endsWith('/login') || path.endsWith('/subscribe')) return await next()
+  
   const authHeader = c.req.header('Authorization')
   const correctPassword = c.env.ADMIN_PASSWORD
   if (!correctPassword) return c.json({ success: false, error: '未设置环境变量 ADMIN_PASSWORD' }, 500)
@@ -21,7 +24,7 @@ app.onError((err, c) => {
   return c.json({ error: err.message }, 500)
 })
 
-// --- 工具函数 ---
+// --- 通用工具函数 ---
 const formatBytes = (bytes) => {
   if (!bytes || isNaN(bytes)) return '0 B'
   const k = 1024
@@ -47,21 +50,29 @@ const getGeoInfo = async (host) => {
   return null
 }
 
-// 带重试的 Fetch
 const fetchWithRetry = async (url, options = {}, retries = 2) => {
   for (let i = 0; i <= retries; i++) {
     try {
       const res = await fetch(url, options)
-      if (res.ok) return res
-      if (res.status === 404 || res.status === 401) return res
-      if (i === retries) return res
-    } catch (err) {
-      if (i === retries) throw err
-    }
+      if (res.ok || res.status === 404 || res.status === 401) return res
+    } catch (err) { if (i === retries) throw err }
   }
 }
 
-// --- 核心：节点解析函数 ---
+const safeAtob = (str) => {
+  try {
+    const clean = str.replace(/\s/g, '').replace(/-/g, '+').replace(/_/g, '/')
+    return atob(clean)
+  } catch (e) { return null }
+}
+
+const safeBtoa = (str) => {
+  try {
+    return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (match, p1) => String.fromCharCode('0x' + p1)))
+  } catch (e) { return str }
+}
+
+// --- 节点解析逻辑 ---
 const parseNodes = (text) => {
   const nodes = []
   let decodedText = text
@@ -76,19 +87,14 @@ const parseNodes = (text) => {
   for (const line of lines) {
     const trimLine = line.trim()
     if (!trimLine) continue
-
     if (trimLine.startsWith('vmess://')) {
       try {
         const b64 = trimLine.substring(8).replace(/-/g, '+').replace(/_/g, '/')
-        const jsonStr = atob(b64)
-        const config = JSON.parse(jsonStr)
+        const config = JSON.parse(atob(b64))
         nodes.push({ name: config.ps || 'vmess节点', type: 'vmess', link: trimLine })
-      } catch (e) {
-        nodes.push({ name: 'vmess节点(解析失败)', type: 'vmess', link: trimLine })
-      }
+      } catch (e) { nodes.push({ name: 'vmess解析失败', type: 'vmess', link: trimLine }) }
       continue
     }
-
     if (trimLine.match(regex)) {
       const protocol = trimLine.split(':')[0]
       let name = `${protocol}节点`
@@ -100,25 +106,105 @@ const parseNodes = (text) => {
       continue
     }
   }
-  
-  if (nodes.length === 0) {
-    const nameRegex = /^\s*-\s*(?:name:|{\s*name:)\s*(.+?)(?:}|)\s*$/gm
-    let match
-    while ((match = nameRegex.exec(text)) !== null) {
-        nodes.push({ name: match[1].trim(), type: 'clash', link: '' })
-    }
-  }
   return nodes
 }
 
-// --- API 路由 ---
+const parseNodeName = (link) => {
+  const trimLink = link.trim()
+  if (!trimLink) return null
+  let name = ''
+  if (trimLink.startsWith('vmess://')) {
+    try {
+      const b64 = trimLink.substring(8).replace(/-/g, '+').replace(/_/g, '/')
+      const config = JSON.parse(atob(b64))
+      name = config.ps
+    } catch (e) {}
+  } else if (trimLink.includes('#')) {
+    const hashIndex = trimLink.lastIndexOf('#')
+    const rawName = trimLink.substring(hashIndex + 1)
+    try { name = decodeURIComponent(rawName) } catch (e) { name = rawName }
+  }
+  return name ? name.trim() : null
+}
 
-// 1. 检测链接
+// --- 核心订阅接口 (已合并) ---
+app.get('/subscribe', async (c) => {
+  try {
+    // 1. 验证 Token
+    const token = c.req.query('token')
+    if (token !== c.env.ADMIN_PASSWORD) {
+       return c.text('Unauthorized: Invalid Token', 401)
+    }
+
+    if (!c.env.DB) return c.text('Database Error: Please bind D1', 500)
+
+    // 2. 获取订阅源
+    const { results } = await c.env.DB.prepare(
+      "SELECT * FROM subscriptions WHERE status = 1 ORDER BY sort_order ASC, id DESC"
+    ).all()
+
+    let uniqueNodes = new Set()
+    let orderedNodes = []
+
+    for (const sub of results) {
+      let allowedNodes = null
+      let params = {}
+      try { params = sub.params ? JSON.parse(sub.params) : {} } catch(e) {}
+      
+      if (params.include && Array.isArray(params.include) && params.include.length > 0) {
+        allowedNodes = new Set(params.include.map(n => n.trim()))
+      }
+
+      let rawContent = ""
+      if (sub.type === 'node') {
+        rawContent = sub.url
+      } else {
+        try {
+          const ua = params.ua || 'v2rayNG/1.8.5'
+          const response = await fetchWithRetry(sub.url, { headers: { 'User-Agent': ua } })
+          if (response && response.ok) rawContent = await response.text()
+        } catch (err) {}
+      }
+
+      if (!rawContent) continue
+
+      const decoded = safeAtob(rawContent)
+      const contentToSplit = decoded !== null ? decoded : rawContent
+      const lines = contentToSplit.split(/\r?\n/).filter(line => line.trim() !== '')
+
+      for (const line of lines) {
+        const link = line.trim()
+        if (!link.includes('://')) continue
+
+        let keep = true
+        if (allowedNodes) {
+            const extractedName = parseNodeName(link)
+            if (!extractedName || !allowedNodes.has(extractedName)) keep = false
+        }
+
+        if (keep) {
+            if (!uniqueNodes.has(link)) {
+                uniqueNodes.add(link)
+                orderedNodes.push(link)
+            }
+        }
+      }
+    }
+
+    const finalString = orderedNodes.join('\n')
+    const base64Result = safeBtoa(finalString)
+    return c.text(base64Result)
+
+  } catch (e) {
+    return c.text(`Error: ${e.message}`, 500)
+  }
+})
+
+// --- 其他 API 路由 ---
 app.post('/check', async (c) => {
   try {
     const { url, type, needNodes, ua } = await c.req.json()
     if (!url) return c.json({ success: false, error: '链接为空' })
-
     let resultData = { valid: false, nodeCount: 0, stats: null, location: null, nodes: [] }
     const userAgent = ua || 'v2rayNG/1.8.5'
 
@@ -168,35 +254,24 @@ app.post('/check', async (c) => {
         }
       }
     }
-
     const text = (v2rayRes && v2rayRes.ok) ? await v2rayRes.text() : await clashRes.text()
     const nodeList = parseNodes(text)
-    
     resultData.valid = true
     resultData.nodeCount = nodeList.length
     if (needNodes) resultData.nodes = nodeList
-
     return c.json({ success: true, data: resultData })
-
-  } catch (e) {
-    return c.json({ success: false, error: e.message })
-  }
+  } catch (e) { return c.json({ success: false, error: e.message }) }
 })
 
-// CRUD
 app.get('/subs', async (c) => {
-  if (!c.env.DB) return c.json({ error: 'DB未绑定 (请在CF设置中绑定D1数据库)' }, 500)
-  try {
-      const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all()
-      const data = results.map(item => {
-        try { item.info = item.info ? JSON.parse(item.info) : null } catch(e) { item.info = null }
-        try { item.params = item.params ? JSON.parse(item.params) : {} } catch(e) { item.params = {} }
-        return item
-      })
-      return c.json({ success: true, data })
-  } catch (e) {
-      return c.json({ error: '数据库查询失败: ' + e.message }, 500)
-  }
+  if (!c.env.DB) return c.json({ error: 'DB未绑定' }, 500)
+  const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all()
+  const data = results.map(item => {
+    try { item.info = item.info ? JSON.parse(item.info) : null } catch(e) { item.info = null }
+    try { item.params = item.params ? JSON.parse(item.params) : {} } catch(e) { item.params = {} }
+    return item
+  })
+  return c.json({ success: true, data })
 })
 
 app.post('/subs', async (c) => {
@@ -252,7 +327,6 @@ app.post('/backup/import', async (c) => {
   try { await c.env.DB.batch(batch); return c.json({ success: true }) } catch(e) { return c.json({ success: false, error: e.message }) }
 })
 
-// Settings
 app.get('/settings', async (c) => {
   if (!c.env.DB) return c.json({ success: false, error: 'DB Missing' }, 500)
   try {
@@ -272,15 +346,11 @@ app.post('/settings', async (c) => {
   return c.json({ success: true })
 })
 
-// Template CRUD
 app.get('/template/default', async (c) => {
     try {
         const { results } = await c.env.DB.prepare("SELECT content FROM templates WHERE is_default = 1 LIMIT 1").all()
-        if (results.length > 0) {
-            return c.json({ success: true, data: results[0].content })
-        } else {
-            return c.json({ success: false, error: 'No default template found' })
-        }
+        if (results.length > 0) { return c.json({ success: true, data: results[0].content }) } 
+        else { return c.json({ success: false, error: 'No default template found' }) }
     } catch(e) { return c.json({ success: false, error: e.message }) }
 })
 

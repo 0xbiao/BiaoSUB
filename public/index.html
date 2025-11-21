@@ -456,7 +456,6 @@ rules:
             const templateTab = ref('edit')
             const previewContent = ref('')
 
-            // MISSING COMPUTED PROPERTIES RESTORED
             const filteredItems = computed(() => {
                 let res = items.value
                 if (filterType.value !== 'all') {
@@ -473,13 +472,9 @@ rules:
             const nodeCount = computed(() => items.value.filter(i => i.type === 'node').length)
             const canSort = computed(() => searchText.value === '' && filterType.value === 'all')
 
-            // MISSING HELPER FUNCTIONS RESTORED
             const getFlagEmoji = (countryCode) => {
                 if (!countryCode) return '🌐'
-                const codePoints = countryCode
-                    .toUpperCase()
-                    .split('')
-                    .map(char =>  127397 + char.charCodeAt(0));
+                const codePoints = countryCode.toUpperCase().split('').map(char =>  127397 + char.charCodeAt(0));
                 return String.fromCodePoint(...codePoints);
             }
 
@@ -506,12 +501,25 @@ rules:
                 return 'text-success'
             }
 
-            const copyLink = (type) => {
-               const url = window.location.origin + '/subscribe?token=' + localStorage.getItem('biaosub_token');
-               copyToClip(url)
+            // --- 修复后的复制链接函数 ---
+            const copyLink = (target) => {
+               const rawUrl = window.location.origin + '/subscribe?token=' + (localStorage.getItem('biaosub_token') || '');
+               
+               if (!target) {
+                   copyToClip(rawUrl);
+                   return;
+               }
+
+               let converter = settings.value.sub_converter_url || 'https://api.v1.mk/sub';
+               if (!converter.startsWith('http')) converter = 'https://' + converter;
+               converter = converter.replace(/\/$/, '');
+
+               const convertedUrl = `${converter}?target=${target}&url=${encodeURIComponent(rawUrl)}&insert=false&config=${encodeURIComponent(settings.value.sub_config || '')}&emoji=true&list=false&tfo=false&scv=true&fdn=false&sort=false&new_name=true`;
+               
+               copyToClip(convertedUrl);
+               showToast(`已复制 ${target} 订阅链接`);
             }
 
-            // Core Logic
             const authFetch = async (url, options = {}) => {
                 const token = localStorage.getItem('biaosub_token')
                 options.headers = { 'Content-Type': 'application/json', 'Authorization': token || '', ...options.headers }
@@ -579,7 +587,6 @@ rules:
                 } catch(e) { return '时间错误' }
             }
 
-            // Charts
             const initCharts = () => {
                 if (!items.value) return
                 let totalUsed = 0; let totalAvailable = 0; let hasTotalData = false
@@ -679,7 +686,16 @@ rules:
                 showToast(`更新完成`)
             }
 
-            const fetchSettings = async () => { try { const res = await authFetch(`${API_BASE}/settings`); const data = await res.json(); if (data.success && data.data) { settings.value = data.data; settingsForm.value = { ...data.data } } } catch (e) {} }
+            const fetchSettings = async () => { 
+                try { 
+                    const res = await authFetch(`${API_BASE}/settings`); 
+                    const data = await res.json(); 
+                    if (data.success && data.data) { 
+                        settings.value = data.data; 
+                        settingsForm.value = { ...data.data } 
+                    } 
+                } catch (e) {} 
+            }
             const saveSettings = async () => { submitting.value=true; try { await authFetch(`${API_BASE}/settings`, { method: 'POST', body: JSON.stringify(settingsForm.value) }); showToast('设置已保存'); settings.value = { ...settingsForm.value }; showSettingsModal.value = false } catch(e){showToast('失败','error')} finally{submitting.value=false} }
             
             const checkUrl = async () => { 
@@ -737,7 +753,6 @@ rules:
                 showModal.value=true 
             }
 
-            // Template Logic
             const openTemplateModal = async () => {
                 showTemplateModal.value = true; templateTab.value = 'edit'; templateContent.value = 'Loading...'
                 try {
@@ -815,7 +830,6 @@ rules:
             const openSettings = () => { settingsForm.value = { ...settings.value }; showSettingsModal.value = true }
             const editItem = (i) => openModal(i)
             
-            // 关键修复：添加生命周期钩子
             onMounted(() => {
                 checkLoginStatus()
             })
@@ -831,7 +845,6 @@ rules:
                 refreshAll, refreshingAll,
                 loadNodesForSelection, selectionLoading, selectionNodes, selectAllNodes,
                 cloneItem, formatTime,
-                // Template
                 showTemplateModal, templateContent, openTemplateModal, saveTemplate, templateSaving, 
                 templateTab, previewContent, generatePreview, resetTemplateToDefault, copyPreview
             }

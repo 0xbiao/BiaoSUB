@@ -89,9 +89,12 @@
                         <div class="text-emerald-400 text-2xl font-extrabold mt-1">已就绪</div>
                         <div class="text-xs text-slate-500 mt-1"><span class="badge badge-xs badge-outline badge-emerald">自动重试 & 去重</span></div>
                     </div>
-                    <div class="relative z-20 mt-auto">
-                        <button @click="copyLink()" class="btn btn-block bg-emerald-500 hover:bg-emerald-600 text-white border-none shadow-lg">
-                            <i class="fa-solid fa-share-nodes mr-2"></i> 复制 Clash 订阅
+                    <div class="relative z-20 mt-auto grid grid-cols-2 gap-2">
+                        <button @click="copyLink('clash')" class="btn bg-emerald-500 hover:bg-emerald-600 text-white border-none shadow-lg">
+                            <i class="fa-solid fa-cat mr-1"></i> Clash
+                        </button>
+                        <button @click="copyLink('base64')" class="btn bg-indigo-500 hover:bg-indigo-600 text-white border-none shadow-lg">
+                            <i class="fa-solid fa-paper-plane mr-1"></i> V2Ray
                         </button>
                     </div>
                 </div>
@@ -345,21 +348,47 @@
     const { createApp, ref, onMounted, computed, nextTick, watch } = Vue
     const API_BASE = '/api'
 
+    // 默认模板常量 (现在已使用您提供的最新版本)
     const DEFAULT_TEMPLATE = `port: 7890
 socks-port: 7891
 mixed-port: 7892
 allow-lan: false
-bind-address: "*"
+bind-address: '*'
 mode: rule
 log-level: info
-ipv6: false
+ipv6: true
 find-process-mode: strict
-external-controller: "127.0.0.1:9090"
+external-controller: '127.0.0.1:9090'
 profile:
   store-selected: true
   store-fake-ip: true
 unified-delay: true
 tcp-concurrent: true
+rule-providers:
+  private_ip:
+    type: http
+    behavior: classical
+    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/private.txt"
+    path: ./ruleset/private.yaml
+    interval: 86400
+  cn_ip:
+    type: http
+    behavior: ipcidr
+    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/cncidr.txt"
+    path: ./ruleset/cncidr.yaml
+    interval: 86400
+  cn_domain:
+    type: http
+    behavior: domain
+    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/cn.txt"
+    path: ./ruleset/cn.yaml
+    interval: 86400
+  geolocation-!cn:
+    type: http
+    behavior: classical
+    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/proxy.txt"
+    path: ./ruleset/proxy.yaml
+    interval: 86400
 ntp:
   enable: true
   write-to-system: false
@@ -371,7 +400,7 @@ dns:
   respect-rules: true
   use-system-hosts: true
   prefer-h3: false
-  listen: "0.0.0.0:1053"
+  listen: '0.0.0.0:1053'
   ipv6: false
   enhanced-mode: fake-ip
   fake-ip-range: 198.18.0.1/16
@@ -383,19 +412,17 @@ dns:
     - +.msftconnecttest.com
     - +.msftncsi.com
   nameserver:
-    - 1.1.1.1
-    - 8.8.8.8
-    - "https://1.1.1.1/dns-query"
-    - "https://dns.quad9.net/dns-query"
+    - 223.5.5.5
+    - 119.29.29.29
   default-nameserver:
-    - 1.1.1.1
-    - 8.8.8.8
+    - 223.5.5.5
+    - 119.29.29.29
   proxy-server-nameserver:
     - 223.5.5.5
     - 119.29.29.29
   fallback:
-    - "https://1.0.0.1/dns-query"
-    - "https://9.9.9.10/dns-query"
+    - 'https://1.0.0.1/dns-query'
+    - 'https://9.9.9.10/dns-query'
   fallback-filter:
     geoip: true
     geoip-code: CN
@@ -408,9 +435,10 @@ tun:
   auto-detect-interface: true
   strict-route: false
   dns-hijack:
-    - "any:53"
+    - 'any:53'
   device: SakuraiTunnel
   endpoint-independent-nat: true
+
 proxies:
   <BIAOSUB_PROXIES>
 
@@ -493,14 +521,18 @@ rules:
                 return 'text-success'
             }
 
-            // --- 极简版复制函数 (直接指向内置后端) ---
-            const copyLink = () => {
-               // 获取当前 Token
+            // --- 核心复制函数 (支持 Clash 和 Base64) ---
+            const copyLink = (type = 'clash') => {
                const token = localStorage.getItem('biaosub_token') || '';
-               // 生成直接地址
-               const clashUrl = `${window.location.origin}/api/subscribe/clash?token=${token}`;
-               copyToClip(clashUrl);
-               showToast('已复制 Clash 订阅链接 (内置转换)');
+               let path = '/api/subscribe/clash';
+               
+               if (type === 'base64') {
+                   path = '/api/subscribe/base64';
+               }
+               
+               const url = `${window.location.origin}${path}?token=${token}`;
+               copyToClip(url);
+               showToast(`已复制 ${type === 'clash' ? 'Clash' : 'V2Ray'} 订阅链接`);
             }
 
             const authFetch = async (url, options = {}) => {

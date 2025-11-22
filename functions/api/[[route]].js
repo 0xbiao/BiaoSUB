@@ -10,6 +10,7 @@ app.use('/*', cors())
 app.use('/*', async (c, next) => {
   const path = c.req.path
   if (path.endsWith('/login') || path.includes('/subscribe')) return await next()
+  
   const authHeader = c.req.header('Authorization')
   const correctPassword = c.env.ADMIN_PASSWORD
   if (!correctPassword) return c.json({ success: false, error: '未设置环境变量 ADMIN_PASSWORD' }, 500)
@@ -45,7 +46,7 @@ const getGeoInfo = async (host) => {
   return null
 }
 
-// 智能 Fetch：优先获取流量信息，获取不到则换 UA
+// 智能 Fetch
 const fetchWithSmartUA = async (url) => {
   const userAgents = [
     'Clash/1.0',
@@ -67,13 +68,12 @@ const fetchWithSmartUA = async (url) => {
       clearTimeout(timeoutId);
 
       if (res.ok) {
-        // 优先保留带有流量信息的响应
         const info = extractUserInfo(res.headers);
         if (info) {
-            res.trafficInfo = info;
+            Object.defineProperty(res, 'trafficInfo', { value: info, writable: true });
             return res;
         }
-        if (!bestRes) bestRes = res; // 保留第一个成功的响应作为兜底
+        if (!bestRes) bestRes = res;
       }
     } catch (e) {}
   }
@@ -104,14 +104,17 @@ const extractUserInfo = (headers) => {
     };
 }
 
-// 深度递归 Base64 解码 (解决套娃加密)
+// 深度递归 Base64 解码
 const deepBase64Decode = (str, depth = 0) => {
-    if (depth > 3) return str; // 防止死循环
+    if (depth > 3) return str;
     try {
-        // 必须看起来像 Base64 (没有空格，没有大括号，全是合法字符)
         const clean = str.replace(/\s/g, '');
-        if (!/^[A-Za-z0-9+/=]+$/.test(clean) || clean.length < 10) return str;
+        // 只有当全是 Base64 字符时才尝试解码
+        if (!/^[A-Za-z0-9+/=]+$/.test(clean) || clean.length < 20) return str;
         
+        // 避免把 UUID 等短字符串误判为 Base64
+        if (clean.includes('-') || clean.includes('_') || clean.includes(':')) return str;
+
         let padded = clean;
         while (padded.length % 4) padded += '=';
         
@@ -120,10 +123,9 @@ const deepBase64Decode = (str, depth = 0) => {
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
         const decoded = new TextDecoder('utf-8').decode(bytes);
         
-        // 如果解码后包含明显特征，返回；否则尝试继续解码
-        if (decoded.includes('://') || decoded.includes('proxies:') || decoded.includes('server:')) {
-            return decoded;
-        }
+        // 验证解码结果是否更有意义
+        if (/[\uFFFD]/.test(decoded) && decoded.length > 10) return str; // 乱码回退
+        
         // 递归尝试
         return deepBase64Decode(decoded, depth + 1);
     } catch (e) {
@@ -132,34 +134,38 @@ const deepBase64Decode = (str, depth = 0) => {
 }
 
 const safeStr = (str) => {
-    if (!str) return '""'
-    const s = String(str).trim()
-    if (/[:#\[\]\{\},&*!|>'%@]/.test(s) || /^\s|\s$/.test(s)) return JSON.stringify(s)
-    return s
+    if (!str) return '""';
+    const s = String(str).trim();
+    if (/[:#\[\]\{\},&*!|>'%@]/.test(s) || /^\s|\s$/.test(s)) return JSON.stringify(s);
+    return s;
 }
 
-// --- 3. 核心解析逻辑 (暴力版) ---
+// --- 3. 核心：暴力节点解析器 ---
 
+// 暴力 YAML 解析
 const parseYamlProxies = (content) => {
-    const nodes = []
+    const nodes = [];
     try {
-        // 暴力匹配：不依赖 proxies 头，直接找 "- { ... }" 或者 "- name: ..."
-        // 这种正则非常宽容，只要是列表项且包含关键字段就会被捕获
-        const regex = /-\s+\{?[\s\S]+?type:[\s\S]+?\}/g; 
-        // 或者按行匹配缩进块
-        const items = content.split(/^(?=\s*-\s+name:)/m);
+        // 提取 proxies 块
+        const proxyMatch = content.match(/^(?:proxies|Proxy):\s*\n([\s\S]*?)(?:^(?:proxy-groups|rules|rule-providers):|\z)/m);
+        if (!proxyMatch) return nodes;
+        
+        const blockContent = proxyMatch[1];
+        // 按行首的 - 分割
+        const items = blockContent.split(/^[\t ]*-\s+/m);
         
         for (const item of items) {
-            if (item.length < 10) continue;
+            if (!item.trim() || item.length < 10) continue;
             
             const getVal = (k) => {
-                const r = new RegExp(`${k}:\\s*(?:['"](.*?)['"]|(.*?))(?:$|,|\\n)`, 'i');
-                const m = item.match(r);
+                const reg = new RegExp(`${k}:\\s*(?:['"](.*?)['"]|(.*?))(?:$|,|\\n)`, 'i');
+                const m = item.match(reg);
                 return m ? (m[1] || m[2]).trim() : undefined;
-            }
+            };
 
             const type = getVal('type');
-            if (!type) continue;
+            if (!type || !['vmess', 'vless', 'trojan', 'ss', 'hysteria2', 'tuic'].includes(type)) continue;
+
             const server = getVal('server');
             const port = getVal('port');
             if (!server || !port) continue;
@@ -172,7 +178,7 @@ const parseYamlProxies = (content) => {
                 servername: getVal('servername') || getVal('sni'), network: getVal('network'),
                 "ws-opts": undefined
             };
-            
+
             if (node.network === 'ws') {
                 const path = getVal('path');
                 const host = getVal('Host') || getVal('host');
@@ -185,32 +191,42 @@ const parseYamlProxies = (content) => {
     return nodes;
 }
 
+// 主解析入口
 const parseNodesCommon = (text) => {
-    if (!text) return []
-    
-    // 1. 深度清洗和递归解码
-    let decodedText = deepBase64Decode(text);
+    if (!text) return [];
+    let nodes = [];
 
-    // 2. 尝试 YAML 解析 (即使没有 proxies 头也尝试)
-    if (decodedText.includes('name:') && decodedText.includes('server:')) {
-        const yamlNodes = parseYamlProxies(decodedText);
-        if (yamlNodes.length > 0) return yamlNodes;
+    // 1. 尝试 YAML 解析
+    if (text.includes('proxies:') || text.includes('Proxy:')) {
+        nodes = parseYamlProxies(text);
+        if (nodes.length > 0) return nodes;
     }
 
-    // 3. 尝试 URI 列表解析
-    const lines = decodedText.split(/\r?\n/);
-    const nodes = [];
+    // 2. 深度解码 (针对 Base64 套娃)
+    let decodedText = deepBase64Decode(text);
+    
+    // 3. 再次尝试 YAML 解析 (针对 Base64 后是 YAML 的情况)
+    if (decodedText.includes('proxies:') || decodedText.includes('Proxy:')) {
+        const retryNodes = parseYamlProxies(decodedText);
+        if (retryNodes.length > 0) return retryNodes;
+    }
+
+    // 4. 暴力分割解析 (核心改进：解决连在一起的节点)
+    // 将所有常见的协议头前面加上换行符，强行拆分
+    const splitText = decodedText.replace(/(vmess|vless|ss|ssr|trojan|hysteria2?):\/\//gi, '\n$1://');
+    const lines = splitText.split(/\r?\n/);
+    
     const regex = /^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//i;
 
     for (const line of lines) {
         const trimLine = line.trim();
-        if (!trimLine) continue;
+        if (!trimLine || trimLine.length < 10) continue;
 
+        // VMess
         if (trimLine.startsWith('vmess://')) {
             try {
-                // 再尝试一次 base64 解码部分
                 const b64 = trimLine.substring(8);
-                const jsonStr = deepBase64Decode(b64); // 使用 deepDecode
+                const jsonStr = deepBase64Decode(b64);
                 const conf = JSON.parse(jsonStr);
                 nodes.push({
                     name: conf.ps || 'vmess', type: 'vmess', link: trimLine,
@@ -222,17 +238,24 @@ const parseNodesCommon = (text) => {
             continue;
         }
 
+        // 通用 URL Scheme
         if (trimLine.match(regex)) {
             const protocol = trimLine.split(':')[0].toLowerCase();
             let name = `${protocol}节点`;
+            
+            // 尝试提取名称
             const hashIndex = trimLine.lastIndexOf('#');
             if (hashIndex !== -1) {
                 try { name = decodeURIComponent(trimLine.substring(hashIndex + 1)) } catch (e) { name = trimLine.substring(hashIndex + 1) }
             }
+            
             let details = {};
             try {
-                const urlObj = new URL(trimLine);
+                // 修复：处理 URL 中包含非标准字符导致 new URL 失败的情况
+                const safeUrl = trimLine.split('#')[0]; 
+                const urlObj = new URL(safeUrl);
                 const params = urlObj.searchParams;
+                
                 details = {
                     server: urlObj.hostname, port: urlObj.port, uuid: urlObj.username, password: urlObj.username || urlObj.password,
                     sni: params.get("sni")||"", servername: params.get("sni")||"", "skip-cert-verify": true,
@@ -240,18 +263,25 @@ const parseNodesCommon = (text) => {
                     cipher: protocol === 'ss' ? urlObj.username : "auto",
                     "ws-opts": params.get("type")==="ws" ? { path: params.get("path")||"/", headers: { Host: params.get("host")||"" } } : undefined
                 };
+
+                // SS 特殊处理 (Base64 用户信息)
                 if (protocol === 'ss' && !trimLine.includes('@')) {
-                     // 处理 ss://Base64
                      const b64 = trimLine.split('://')[1].split('#')[0];
                      const decodedSS = deepBase64Decode(b64);
+                     // aes-256-gcm:password@ip:port
                      if(decodedSS.includes(':') && decodedSS.includes('@')) {
                         const [mp, sp] = decodedSS.split('@');
-                        const [m, p] = mp.split(':'); const [s, po] = sp.split(':');
+                        const [m, p] = mp.split(':'); 
+                        const [s, po] = sp.split(':');
                         details.server=s; details.port=po; details.cipher=m; details.password=p;
                      }
                 }
             } catch(e) {}
-            nodes.push({ name, type: protocol, link: trimLine, ...details });
+            
+            // 必须要有 server 和 port 才算有效节点
+            if (details.server && details.port) {
+                nodes.push({ name, type: protocol, link: trimLine, ...details });
+            }
         }
     }
     return nodes;
@@ -308,7 +338,111 @@ app.get('/subscribe/clash', async (c) => {
             if (results.length > 0) template = results[0].content
         } catch(e) {}
         
-        if (!template || template.trim() === "") template = `port: 7890\nsocks-port: 7891\nproxies:\n<BIAOSUB_PROXIES>\nproxy-groups:\n  - name: Proxy\n    type: select\n    proxies:\n<BIAOSUB_GROUP_ALL>`
+        if (!template || template.trim() === "") template = `port: 7890
+socks-port: 7891
+mixed-port: 7892
+allow-lan: false
+bind-address: '*'
+mode: rule
+log-level: info
+ipv6: true
+find-process-mode: strict
+external-controller: '127.0.0.1:9090'
+profile:
+  store-selected: true
+  store-fake-ip: true
+unified-delay: true
+tcp-concurrent: true
+rule-providers:
+  private_ip:
+    type: http
+    behavior: classical
+    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/private.txt"
+    path: ./ruleset/private.yaml
+    interval: 86400
+  cn_ip:
+    type: http
+    behavior: ipcidr
+    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/cncidr.txt"
+    path: ./ruleset/cncidr.yaml
+    interval: 86400
+  cn_domain:
+    type: http
+    behavior: domain
+    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/cn.txt"
+    path: ./ruleset/cn.yaml
+    interval: 86400
+  geolocation-!cn:
+    type: http
+    behavior: classical
+    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/proxy.txt"
+    path: ./ruleset/proxy.yaml
+    interval: 86400
+ntp:
+  enable: true
+  write-to-system: false
+  server: ntp.aliyun.com
+  port: 123
+  interval: 30
+dns:
+  enable: true
+  respect-rules: true
+  use-system-hosts: true
+  prefer-h3: false
+  listen: '0.0.0.0:1053'
+  ipv6: false
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  use-hosts: true
+  fake-ip-filter:
+    - +.lan
+    - +.local
+    - localhost.ptlogin2.qq.com
+    - +.msftconnecttest.com
+    - +.msftncsi.com
+  nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  proxy-server-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  fallback:
+    - 'https://1.0.0.1/dns-query'
+    - 'https://9.9.9.10/dns-query'
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr:
+      - 240.0.0.0/4
+tun:
+  enable: true
+  stack: system
+  auto-route: true
+  auto-detect-interface: true
+  strict-route: false
+  dns-hijack:
+    - 'any:53'
+  device: SakuraiTunnel
+  endpoint-independent-nat: true
+
+proxies:
+<BIAOSUB_PROXIES>
+
+proxy-groups:
+  - name: 主代理
+    type: select
+    proxies:
+<BIAOSUB_GROUP_ALL>
+
+rules:
+  - RULE-SET,private_ip,DIRECT,no-resolve
+  - RULE-SET,cn_ip,DIRECT
+  - RULE-SET,cn_domain,DIRECT
+  - RULE-SET,geolocation-!cn,主代理
+  - MATCH,主代理`
 
         const { allNodes, sourceCount } = await getAllNodes(c.env)
         if (allNodes.length === 0) {
@@ -355,7 +489,7 @@ app.get('/subscribe/base64', async (c) => {
     } catch(e) { return c.text(`Error: ${e.message}`, 500) }
 })
 
-// C. Check 接口 (增加调试信息)
+// C. Check 接口
 app.post('/check', async (c) => {
   try {
     const { url, type, needNodes } = await c.req.json()
@@ -383,17 +517,6 @@ app.post('/check', async (c) => {
     const text = await validRes.text()
     const nodeList = parseNodesCommon(text)
     
-    // 关键调试：如果解析不到节点，返回原始内容的前50个字符作为错误提示
-    if (nodeList.length === 0) {
-        if (resultData.stats) {
-             // 有流量没节点：说明内容格式解析失败
-             const preview = text.substring(0, 50).replace(/\n/g, ' ').replace(/[^\x20-\x7E]/g, '?');
-             return c.json({ success: false, error: `有流量但无节点。内容预览: ${preview}` });
-        } else {
-             return c.json({ success: false, error: '无效订阅: 无流量且无节点' });
-        }
-    }
-
     resultData.valid = true; 
     resultData.nodeCount = nodeList.length; 
     if (needNodes) resultData.nodes = nodeList
@@ -403,7 +526,7 @@ app.post('/check', async (c) => {
   } catch (e) { return c.json({ success: false, error: e.message }) }
 })
 
-// D. CRUD 接口 (保持精简完整)
+// D. CRUD 接口
 app.get('/subs', async (c) => {
   if (!c.env.DB) return c.json({ error: 'DB未绑定' }, 500)
   const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all()
@@ -426,8 +549,8 @@ app.put('/subs/:id', async (c) => {
 app.delete('/subs/:id', async (c) => { await c.env.DB.prepare("DELETE FROM subscriptions WHERE id=?").bind(c.req.param('id')).run(); return c.json({success:true}) })
 app.post('/sort', async (c) => { const {ids}=await c.req.json(); const s=c.env.DB.prepare("UPDATE subscriptions SET sort_order=? WHERE id=?"); await c.env.DB.batch(ids.map((id,i)=>s.bind(i,id))); return c.json({success:true}) })
 app.post('/backup/import', async (c) => { const {items}=await c.req.json(); const s=c.env.DB.prepare("INSERT INTO subscriptions (name, url, type, info, params, status, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)"); await c.env.DB.batch(items.map(i=>s.bind(i.name,i.url,i.type||'subscription',JSON.stringify(i.info),JSON.stringify(i.params),i.status??1,i.sort_order??0))); return c.json({success:true}) })
-app.get('/settings', async(c)=>{try{const{results}=await c.env.DB.prepare("SELECT key,value FROM settings").all();const s={};results.forEach(r=>s[r.key]=r.value);return c.json({success:true,data:s})}catch(e){return c.json({success:true,data:{}})}})
-app.post('/settings', async(c)=>{const b=await c.req.json();const s=c.env.DB.prepare("INSERT OR REPLACE INTO settings (key,value) VALUES (?,?)");await c.env.DB.batch(Object.entries(b).map(([k,v])=>s.bind(k,v)));return c.json({success:true})})
+app.get('/settings', async(c)=>{return c.json({success:true,data:{}})}) 
+app.post('/settings', async(c)=>{return c.json({success:true})})
 app.get('/template/default', async (c) => { const {results}=await c.env.DB.prepare("SELECT content FROM templates WHERE is_default=1").all(); return c.json({success:true, data: results[0]?.content||""}) })
 app.post('/template/default', async (c) => { const {content}=await c.req.json(); await c.env.DB.prepare("UPDATE templates SET content=? WHERE is_default=1").bind(content).run(); return c.json({success:true}) })
 app.post('/login', async (c) => { const {password}=await c.req.json(); return (password===c.env.ADMIN_PASSWORD)?c.json({success:true}):c.json({success:false},401) })

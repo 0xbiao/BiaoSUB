@@ -65,43 +65,37 @@
             </div>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-10">
-            <div class="md:col-span-1 flex flex-col gap-6">
-                <div class="stat glass-panel rounded-2xl shadow-lg py-4">
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-10">
+            <div class="stats shadow-lg bg-slate-800/50 border border-slate-700 rounded-2xl overflow-hidden">
+                <div class="stat">
                     <div class="stat-figure text-primary"><i class="fa-solid fa-globe text-3xl"></i></div>
                     <div class="stat-title text-slate-400">订阅源</div>
                     <div class="stat-value text-primary">{{ subCount }}</div>
                 </div>
-                <div class="stat glass-panel rounded-2xl shadow-lg py-4">
+                <div class="stat border-l border-slate-700">
                     <div class="stat-figure text-secondary"><i class="fa-solid fa-microchip text-3xl"></i></div>
                     <div class="stat-title text-slate-400">独立节点</div>
                     <div class="stat-value text-secondary">{{ nodeCount }}</div>
                 </div>
-                <div class="glass-panel rounded-2xl shadow-lg p-6 relative group flex flex-col gap-6 min-h-[160px]">
-                    <div class="absolute inset-0 overflow-hidden rounded-2xl pointer-events-none">
-                        <div class="absolute -right-6 -top-6 opacity-10 group-hover:opacity-20 transition-opacity">
-                            <i class="fa-solid fa-link text-[150px] text-emerald-400"></i>
-                        </div>
-                    </div>
-                    <div class="relative z-10">
-                        <div class="text-slate-400 text-sm font-bold uppercase tracking-wider">聚合订阅</div>
-                        <div class="text-emerald-400 text-2xl font-extrabold mt-1">已就绪</div>
-                        <div class="text-xs text-slate-500 mt-1"><span class="badge badge-xs badge-outline badge-emerald">自动重试 & 去重</span></div>
-                    </div>
-                    <div class="relative z-20 mt-auto grid grid-cols-2 gap-2">
-                        <button @click="copyLink('clash')" class="btn bg-emerald-500 hover:bg-emerald-600 text-white border-none shadow-lg">
-                            <i class="fa-solid fa-cat mr-1"></i> Clash
-                        </button>
-                        <button @click="copyLink('base64')" class="btn bg-indigo-500 hover:bg-indigo-600 text-white border-none shadow-lg">
-                            <i class="fa-solid fa-paper-plane mr-1"></i> V2Ray
-                        </button>
+            </div>
+            
+            <div class="glass-panel rounded-2xl shadow-lg p-6 relative group flex flex-col justify-between min-h-[140px]">
+                <div class="absolute inset-0 overflow-hidden rounded-2xl pointer-events-none">
+                    <div class="absolute -right-6 -top-6 opacity-10 group-hover:opacity-20 transition-opacity">
+                        <i class="fa-solid fa-link text-[150px] text-emerald-400"></i>
                     </div>
                 </div>
-            </div>
-            <div class="md:col-span-3 bg-slate-800/30 rounded-2xl border border-slate-700/50 p-6 flex items-center justify-center">
-                <div class="text-center text-slate-500">
-                    <i class="fa-solid fa-chart-pie text-4xl mb-2 opacity-50"></i>
-                    <p class="text-sm">流量统计面板已移除，让界面更清爽</p>
+                <div class="relative z-10 mb-4">
+                    <div class="text-slate-400 text-sm font-bold uppercase tracking-wider">聚合订阅</div>
+                    <div class="text-emerald-400 text-2xl font-extrabold mt-1">已就绪</div>
+                </div>
+                <div class="relative z-20 grid grid-cols-2 gap-3">
+                    <button @click="copyLink('clash')" class="btn bg-emerald-500 hover:bg-emerald-600 text-white border-none shadow-lg">
+                        <i class="fa-solid fa-cat mr-1"></i> Clash
+                    </button>
+                    <button @click="copyLink('base64')" class="btn bg-indigo-500 hover:bg-indigo-600 text-white border-none shadow-lg">
+                        <i class="fa-solid fa-paper-plane mr-1"></i> V2Ray
+                    </button>
                 </div>
             </div>
         </div>
@@ -277,6 +271,35 @@
             </div>
         </dialog>
 
+        <dialog class="modal" :class="{ 'modal-open': previewModal.show }">
+            <div class="modal-box bg-slate-800 border border-slate-700 w-11/12 max-w-3xl">
+                <div class="flex justify-between items-center mb-4">
+                    <h3 class="font-bold text-lg text-white flex items-center gap-2"><i class="fa-solid fa-list-check text-primary"></i> 节点预览 <span class="badge badge-neutral">{{ previewModal.nodes.length }}</span></h3>
+                    <button class="btn btn-sm btn-circle btn-ghost" @click="previewModal.show=false">✕</button>
+                </div>
+                <div class="bg-slate-900 rounded-lg p-1 min-h-[200px] max-h-[60vh] overflow-y-auto custom-scrollbar">
+                    <div v-if="previewLoading" class="flex justify-center items-center h-40"><span class="loading loading-spinner loading-lg text-primary"></span></div>
+                    <div v-else-if="previewModal.nodes.length === 0" class="text-center py-10 text-slate-500">暂无节点信息或解析失败</div>
+                    <div v-else class="grid grid-cols-1 gap-1">
+                        <div v-for="(node, idx) in previewModal.nodes" :key="idx" class="flex items-center justify-between p-3 hover:bg-slate-800 rounded transition-colors group">
+                            <div class="flex items-center gap-3 min-w-0 flex-1">
+                                <span class="text-xs font-mono text-slate-500 w-6 text-right">{{ idx + 1 }}</span>
+                                <span class="badge badge-sm badge-outline shrink-0 w-16 justify-center">{{ node.type }}</span>
+                                <span class="text-sm text-slate-200 truncate flex-1" :title="node.name">{{ node.name }}</span>
+                            </div>
+                            <button v-if="node.link" @click="copyToClip(node.link)" class="btn btn-ghost btn-xs text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <i class="fa-regular fa-copy"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-action flex justify-between items-center mt-4">
+                    <div class="text-xs text-slate-500">仅展示解析成功的节点</div>
+                    <div class="flex gap-2"><button class="btn btn-ghost" @click="previewModal.show=false">关闭</button><button class="btn btn-primary" @click="copyAllNodes" :disabled="previewModal.nodes.length === 0"><i class="fa-regular fa-copy"></i> 复制全部节点</button></div>
+                </div>
+            </div>
+        </dialog>
+
         <dialog class="modal" :class="{ 'modal-open': showSettingsModal }">
             <div class="modal-box bg-slate-800 border border-slate-700">
                 <h3 class="font-bold text-lg text-white mb-6 flex items-center"><i class="fa-solid fa-sliders mr-2 text-accent"></i> 全局设置</h3>
@@ -429,6 +452,7 @@ rules:
             const qrModal = ref({ show: false, title: '', url: '' })
             const checking = ref(false); const checkResult = ref(null); let sortableInstance = null
             const refreshingAll = ref(false); const previewModal = ref({ show: false, nodes: [] }); const previewLoading = ref(false)
+            // 注意：流量图表已移除，不需要 initCharts 了
             
             // Template
             const showTemplateModal = ref(false)
@@ -482,6 +506,7 @@ rules:
                 return 'text-success'
             }
 
+            // --- 核心复制函数 ---
             const copyLink = (type = 'clash') => {
                const token = localStorage.getItem('biaosub_token') || '';
                let path = '/api/subscribe/clash';
@@ -561,6 +586,8 @@ rules:
                     return date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
                 } catch(e) { return '时间错误' }
             }
+
+            // 移除了 initCharts 函数
 
             const initSortable = () => {
                 const el = document.getElementById('sortable-list')
@@ -763,5 +790,3 @@ rules:
 </script>
 </body>
 </html>
-
-}

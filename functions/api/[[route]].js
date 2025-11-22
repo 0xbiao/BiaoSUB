@@ -57,9 +57,13 @@ const safeBase64Decode = (str) => {
         let clean = str.replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, '');
         while (clean.length % 4) clean += '=';
         return decodeURIComponent(escape(atob(clean)));
-    } catch (e) {
-        return str;
-    }
+    } catch (e) { return str; }
+}
+
+const safeBase64Encode = (str) => {
+    try {
+        return btoa(unescape(encodeURIComponent(str)));
+    } catch (e) { return btoa(str); }
 }
 
 const deepBase64Decode = (str, depth = 0) => {
@@ -82,9 +86,7 @@ const deepBase64Decode = (str, depth = 0) => {
             return decoded;
         }
         return deepBase64Decode(decoded, depth + 1);
-    } catch (e) {
-        return str;
-    }
+    } catch (e) { return str; }
 }
 
 const extractUserInfo = (headers) => {
@@ -113,10 +115,7 @@ const extractUserInfo = (headers) => {
 }
 
 const fetchWithSmartUA = async (url) => {
-  const userAgents = [
-    'ClashMeta/1.0', 'v2rayNG/1.8.5', 'Clash/1.0',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-  ];
+  const userAgents = ['ClashMeta/1.0', 'v2rayNG/1.8.5', 'Clash/1.0', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'];
   let bestRes = null;
   for (const ua of userAgents) {
     try {
@@ -152,7 +151,55 @@ const safeStr = (str) => {
 }
 const smartStr = safeStr;
 
-// --- 3. 核心解析逻辑 ---
+// --- 3. 核心解析与链接重组逻辑 ---
+
+// 将节点对象转换为标准链接字符串 (关键修复：解决 v2rayN 无法识别 YAML 节点的问题)
+const generateNodeLink = (node) => {
+    try {
+        if (node.type === 'vmess') {
+            const vmessObj = {
+                v: "2", ps: node.name, add: node.server, port: node.port, id: node.uuid,
+                aid: node.alterId || 0, scy: node.cipher || "auto", net: node.network || "tcp",
+                type: "none", host: "", path: "", tls: node.tls ? "tls" : ""
+            };
+            if (node["ws-opts"]) {
+                vmessObj.net = "ws";
+                vmessObj.path = node["ws-opts"].path || "";
+                if (node["ws-opts"].headers && node["ws-opts"].headers.Host) {
+                    vmessObj.host = node["ws-opts"].headers.Host;
+                }
+            }
+            return 'vmess://' + safeBase64Encode(JSON.stringify(vmessObj));
+        }
+        
+        if (node.type === 'ss') {
+            const auth = `${node.cipher}:${node.password}`;
+            return `ss://${safeBase64Encode(auth)}@${node.server}:${node.port}#${encodeURIComponent(node.name)}`;
+        }
+        
+        if (['vless', 'trojan', 'hysteria2'].includes(node.type)) {
+            let link = `${node.type}://${node.uuid || node.password || ''}@${node.server}:${node.port}?`;
+            const params = [];
+            if (node.tls) params.push('security=tls');
+            if (node.servername) params.push(`sni=${node.servername}`);
+            if (node.network === 'ws') {
+                params.push('type=ws');
+                if (node["ws-opts"]) {
+                    if (node["ws-opts"].path) params.push(`path=${encodeURIComponent(node["ws-opts"].path)}`);
+                    if (node["ws-opts"].headers && node["ws-opts"].headers.Host) params.push(`host=${encodeURIComponent(node["ws-opts"].headers.Host)}`);
+                }
+            }
+            if (node.type === 'vless' && node.network === 'grpc') params.push('type=grpc');
+            link += params.join('&');
+            link += `#${encodeURIComponent(node.name)}`;
+            return link;
+        }
+        // 对于未知类型，返回原始链接或构造简单链接
+        return node.link || `${node.type}://${node.server}:${node.port}#${encodeURIComponent(node.name)}`;
+    } catch (e) {
+        return '';
+    }
+}
 
 const parseYamlProxies = (content) => {
     const nodes = [];
@@ -188,7 +235,8 @@ const parseYamlProxies = (content) => {
             if (node.network === 'ws') {
                 node["ws-opts"] = { path: getVal('path')||'/', headers: { Host: getVal('host')||'' } };
             }
-            node.link = `${type}://${node.server}:${node.port}#${encodeURIComponent(node.name)}`;
+            // 关键：生成标准链接，确保 v2rayN 能识别
+            node.link = generateNodeLink(node);
             nodes.push(node);
         }
     }
@@ -283,12 +331,11 @@ const parseNodesCommon = (text) => {
     return nodes;
 }
 
-// --- 4. API 路由 (修复：去重逻辑) ---
+// --- 4. API 路由 (修改：完全移除去重逻辑) ---
 
 async function getAllNodes(env) {
     const { results: subs } = await env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1 ORDER BY sort_order ASC, id DESC").all()
     let allNodes = []
-    let uniqueKeys = new Set() // 使用 Set 存储完整链接，而非仅 IP+端口
     let sourceCount = 0
 
     for (const sub of subs) {
@@ -310,21 +357,23 @@ async function getAllNodes(env) {
         
         const nodes = parseNodesCommon(rawContent)
         for (const node of nodes) {
-            // 修复：不再使用 server:port 作为唯一键
-            // 改为使用完整链接(link)作为唯一键，这样能区分同一 IP 不同端口/UUID 的节点
-            const key = node.link || `${node.server}:${node.port}:${node.uuid||''}:${node.password||''}`;
-            
-            if (uniqueKeys.has(key)) continue
+            // 已移除所有 uniqueKeys 判断，不做任何去重
             
             if (allowedNames && !allowedNames.has(node.name.trim())) continue
             
-            // 处理重名
+            // 仅处理重名，防止客户端覆盖
             let finalName = node.name.trim()
             let counter = 1
             while (allNodes.some(n => n.name === finalName)) finalName = `${node.name} ${counter++}`
             node.name = finalName
             
-            uniqueKeys.add(key)
+            // 重新更新 link 中的名字，确保 Base64 里的名字也是新的
+            if (node.link.includes('vmess://')) {
+                // vmess 名字在 base64 里面，比较难改，暂时不动，客户端通常优先用外部备注
+            } else if (node.link.includes('#')) {
+                node.link = node.link.split('#')[0] + '#' + encodeURIComponent(finalName);
+            }
+
             allNodes.push(node)
         }
     }

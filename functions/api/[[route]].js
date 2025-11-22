@@ -10,6 +10,7 @@ app.use('/*', cors())
 app.use('/*', async (c, next) => {
   const path = c.req.path
   if (path.endsWith('/login') || path.includes('/subscribe')) return await next()
+  
   const authHeader = c.req.header('Authorization')
   const correctPassword = c.env.ADMIN_PASSWORD
   if (!correctPassword) return c.json({ success: false, error: '未设置环境变量 ADMIN_PASSWORD' }, 500)
@@ -22,7 +23,32 @@ app.onError((err, c) => {
   return c.json({ error: err.message }, 500)
 })
 
-// --- 2. 增强工具函数 ---
+// --- 2. 工具函数 ---
+
+const formatBytes = (bytes) => {
+  if (!bytes || isNaN(bytes)) return '0 B'
+  const k = 1024
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
+const formatDate = (timestamp) => {
+  if (!timestamp || isNaN(timestamp)) return '长期'
+  const date = new Date(timestamp.toString().length === 10 ? timestamp * 1000 : timestamp)
+  return date.toLocaleDateString()
+}
+
+const getGeoInfo = async (host) => {
+  try {
+    const res = await fetch(`http://ip-api.com/json/${host}?fields=status,country,countryCode,query`)
+    const data = await res.json()
+    if (data.status === 'success') {
+      return { country: data.country, code: data.countryCode, ip: data.query }
+    }
+  } catch (e) {}
+  return null
+}
 
 const fetchWithRetry = async (url, options = {}, retries = 1) => {
   for (let i = 0; i <= retries; i++) {
@@ -36,26 +62,15 @@ const fetchWithRetry = async (url, options = {}, retries = 1) => {
   }
 }
 
-// 核心：解决乱码的 Base64 解码器
 const safeBase64Decode = (str) => {
   try {
-    // 1. 清理非 Base64 字符
     let clean = str.replace(/\s/g, '').replace(/-/g, '+').replace(/_/g, '/')
-    // 2. 补全 padding
     while (clean.length % 4) clean += '='
-    
-    // 3. 解码为二进制字符串
     const binary = atob(clean)
-    
-    // 4. 转换为 Uint8Array 并用 TextDecoder 解码 (解决中文乱码的关键)
     const bytes = new Uint8Array(binary.length)
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i)
-    }
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
     return new TextDecoder('utf-8').decode(bytes)
-  } catch (e) {
-    return null
-  }
+  } catch (e) { return null }
 }
 
 const safeStr = (str) => {
@@ -65,71 +80,34 @@ const safeStr = (str) => {
     return s
 }
 
-const getGeoInfo = async (host) => {
-  try {
-    const res = await fetch(`http://ip-api.com/json/${host}?fields=status,country,countryCode,query`)
-    const data = await res.json()
-    if (data.status === 'success') return { country: data.country, code: data.countryCode, ip: data.query }
-  } catch (e) {}
-  return null
-}
-
-// --- 3. 核心：全能节点解析器 ---
-
-// 简单的 YAML 提取逻辑 (提取 proxies 数组)
+// --- 3. 核心：全能节点解析器 (复用之前的 YAML/Base64 逻辑) ---
 const parseYamlProxies = (content) => {
     const nodes = []
     try {
-        // 找到 proxies: 或 Proxy: 开始的位置
         const proxyBlockMatch = content.match(/^(proxies|Proxy):\s*\n/m)
         if (!proxyBlockMatch) return nodes
-
         const startIndex = proxyBlockMatch.index + proxyBlockMatch[0].length
-        // 截取 proxies 之后的内容
         const blockContent = content.substring(startIndex)
-        
-        // 按 "- name:" 分割，这是一种简单的 YAML 列表解析 heuristic
-        // 注意：这只能处理标准格式的 Clash 配置文件
         const items = blockContent.split(/^\s*-\s+name:/m)
-        
-        // 跳过第一个（通常是空的或者不相关的）
         for (let i = 1; i < items.length; i++) {
-            const itemBlock = "name:" + items[i] // 补回被 split 吞掉的 name:
-            
-            // 提取关键字段的正则
+            const itemBlock = "name:" + items[i]
             const extract = (key) => {
                 const match = itemBlock.match(new RegExp(`^\\s*${key}:\\s*(.*)$`, 'm'))
-                if (!match) return undefined
-                // 去除引号和注释
-                return match[1].trim().replace(/^['"]|['"]$/g, '').split('#')[0].trim()
+                return match ? match[1].trim().replace(/^['"]|['"]$/g, '').split('#')[0].trim() : undefined
             }
-
             const type = extract('type')
-            // 只保留支持的节点类型
             if (!type || !['vmess', 'vless', 'trojan', 'ss', 'hysteria2', 'tuic'].includes(type)) continue
-
-            // 提取 server 信息
             const server = extract('server')
             const port = extract('port')
             if (!server || !port) continue
 
-            // 构建节点对象
             const node = {
-                name: extract('name'),
-                type: type,
-                server: server,
-                port: port,
-                cipher: extract('cipher'),
-                uuid: extract('uuid'),
-                password: extract('password'),
-                tls: extract('tls') === 'true',
-                "skip-cert-verify": extract('skip-cert-verify') === 'true',
-                servername: extract('servername') || extract('sni'),
-                network: extract('network'),
+                name: extract('name'), type: type, server: server, port: port,
+                cipher: extract('cipher'), uuid: extract('uuid'), password: extract('password'),
+                tls: extract('tls') === 'true', "skip-cert-verify": extract('skip-cert-verify') === 'true',
+                servername: extract('servername') || extract('sni'), network: extract('network'),
                 "ws-opts": undefined
             }
-
-            // 尝试提取 ws-opts (简单处理 path 和 host)
             if (node.network === 'ws') {
                 const pathMatch = itemBlock.match(/path:\s*(.*)/)
                 const hostMatch = itemBlock.match(/headers:[\s\S]*?Host:\s*(.*)/i)
@@ -138,35 +116,24 @@ const parseYamlProxies = (content) => {
                     headers: { Host: hostMatch ? hostMatch[1].trim().replace(/^['"]|['"]$/g, '') : '' }
                 }
             }
-            
-            // 补充原始链接 (用于 V2Ray Base64 订阅)
-            // 这是一个模拟链接，虽然不是原始的，但能让 V2RayN 识别
             node.link = `${type}://${node.server}:${node.port}#${encodeURIComponent(node.name)}`
-            
             nodes.push(node)
         }
-    } catch(e) {
-        console.error('YAML parse error', e)
-    }
+    } catch(e) {}
     return nodes
 }
 
 const parseNodesCommon = (text) => {
     if (!text) return []
-    
-    // 1. 优先尝试作为 YAML 解析 (解决机场订阅 0 节点问题)
     if (text.includes('proxies:') || text.includes('Proxy:')) {
         const yamlNodes = parseYamlProxies(text)
         if (yamlNodes.length > 0) return yamlNodes
     }
-
     let decodedText = text
-    // 2. 尝试 Base64 解码 (使用新解码器解决乱码)
     if (!text.includes('://')) {
         const decoded = safeBase64Decode(text)
         if (decoded) decodedText = decoded
     }
-
     const lines = decodedText.split(/\r?\n/)
     const nodes = []
     const regex = /^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//i
@@ -174,60 +141,41 @@ const parseNodesCommon = (text) => {
     for (const line of lines) {
         const trimLine = line.trim()
         if (!trimLine) continue
-
-        // VMess 解析
         if (trimLine.startsWith('vmess://')) {
             try {
-                const b64 = trimLine.substring(8)
-                // 使用 safeBase64Decode 处理 JSON
-                const jsonStr = safeBase64Decode(b64)
+                const jsonStr = safeBase64Decode(trimLine.substring(8))
                 const conf = JSON.parse(jsonStr)
-                
                 nodes.push({
-                    name: conf.ps || 'vmess节点',
-                    type: 'vmess',
-                    link: trimLine,
+                    name: conf.ps || 'vmess', type: 'vmess', link: trimLine,
                     server: conf.add, port: conf.port, uuid: conf.id, alterId: conf.aid||0, 
                     cipher: "auto", tls: conf.tls==="tls", servername: conf.host||"", 
-                    network: conf.net||"tcp", 
-                    "ws-opts": conf.net==="ws" ? { path: conf.path||"/", headers: { Host: conf.host||"" } } : undefined
+                    network: conf.net||"tcp", "ws-opts": conf.net==="ws" ? { path: conf.path||"/", headers: { Host: conf.host||"" } } : undefined
                 })
-            } catch (e) {
-                 nodes.push({ name: 'vmess解析异常', type: 'vmess', link: trimLine })
-            }
+            } catch (e) { nodes.push({ name: 'vmess解析异常', type: 'vmess', link: trimLine }) }
             continue
         }
-
-        // 通用链接解析
         if (trimLine.match(regex)) {
             const protocol = trimLine.split(':')[0].toLowerCase()
             let name = `${protocol}节点`
-            let details = {}
-            
             const hashIndex = trimLine.lastIndexOf('#')
             if (hashIndex !== -1) {
                 try { name = decodeURIComponent(trimLine.substring(hashIndex + 1)) } catch (e) { name = trimLine.substring(hashIndex + 1) }
             }
-
+            let details = {}
             try {
                 const urlObj = new URL(trimLine);
                 const params = urlObj.searchParams;
                 details = {
-                    server: urlObj.hostname, port: urlObj.port, uuid: urlObj.username, 
-                    password: urlObj.username || urlObj.password,
+                    server: urlObj.hostname, port: urlObj.port, uuid: urlObj.username, password: urlObj.username || urlObj.password,
                     sni: params.get("sni")||"", servername: params.get("sni")||"", "skip-cert-verify": true,
                     network: params.get("type")||"tcp", tls: params.get("security")==="tls",
                     cipher: protocol === 'ss' ? urlObj.username : "auto",
                     "ws-opts": params.get("type")==="ws" ? { path: params.get("path")||"/", headers: { Host: params.get("host")||"" } } : undefined
                 }
-                
                 if (protocol === 'ss' && !trimLine.includes('@')) {
-                     // 处理旧版 ss://Base64
-                     // 这里为了简化，假设解码后格式正确，实际可以进一步增强
                      details.cipher = "aes-256-gcm"; details.password = "dummy";
                 }
             } catch(e) {}
-
             nodes.push({ name: name, type: protocol, link: trimLine, ...details })
         }
     }
@@ -236,7 +184,7 @@ const parseNodesCommon = (text) => {
 
 // --- 4. API 路由 ---
 
-// 获取所有节点 (复用逻辑)
+// 获取所有节点
 async function getAllNodes(env) {
     const { results: subs } = await env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1 ORDER BY sort_order ASC, id DESC").all()
     let allNodes = []
@@ -256,7 +204,6 @@ async function getAllNodes(env) {
                 if (res && res.ok) rawContent = await res.text()
             } catch(e) {}
         }
-
         if (!rawContent) continue
         
         const nodes = parseNodesCommon(rawContent)
@@ -264,14 +211,10 @@ async function getAllNodes(env) {
             const key = `${node.server}:${node.port}`
             if (uniqueKeys.has(key)) continue
             if (allowedNames && !allowedNames.has(node.name.trim())) continue
-
             let finalName = node.name.trim()
             let counter = 1
-            while (allNodes.some(n => n.name === finalName)) {
-                finalName = `${node.name} ${counter++}`
-            }
+            while (allNodes.some(n => n.name === finalName)) finalName = `${node.name} ${counter++}`
             node.name = finalName
-
             uniqueKeys.add(key)
             allNodes.push(node)
         }
@@ -284,8 +227,7 @@ app.get('/subscribe/clash', async (c) => {
     try {
         const token = c.req.query('token')
         if (token !== c.env.ADMIN_PASSWORD) return c.text('Unauthorized', 401)
-        if (!c.env.DB) return c.text('DB Error', 500)
-
+        
         let template = ""
         try {
             const { results } = await c.env.DB.prepare("SELECT content FROM templates WHERE is_default = 1 LIMIT 1").all()
@@ -294,27 +236,111 @@ app.get('/subscribe/clash', async (c) => {
         
         if (!template || template.trim() === "") template = `port: 7890
 socks-port: 7891
+mixed-port: 7892
 allow-lan: false
+bind-address: '*'
 mode: rule
 log-level: info
+ipv6: true
+find-process-mode: strict
 external-controller: '127.0.0.1:9090'
+profile:
+  store-selected: true
+  store-fake-ip: true
+unified-delay: true
+tcp-concurrent: true
+rule-providers:
+  private_ip:
+    type: http
+    behavior: classical
+    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/private.txt"
+    path: ./ruleset/private.yaml
+    interval: 86400
+  cn_ip:
+    type: http
+    behavior: ipcidr
+    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/cncidr.txt"
+    path: ./ruleset/cncidr.yaml
+    interval: 86400
+  cn_domain:
+    type: http
+    behavior: domain
+    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/cn.txt"
+    path: ./ruleset/cn.yaml
+    interval: 86400
+  geolocation-!cn:
+    type: http
+    behavior: classical
+    url: "https://cdn.jsdelivr.net/gh/Loyalsoldier/clash-rules@release/proxy.txt"
+    path: ./ruleset/proxy.yaml
+    interval: 86400
+ntp:
+  enable: true
+  write-to-system: false
+  server: ntp.aliyun.com
+  port: 123
+  interval: 30
 dns:
   enable: true
+  respect-rules: true
+  use-system-hosts: true
+  prefer-h3: false
   listen: '0.0.0.0:1053'
+  ipv6: false
   enhanced-mode: fake-ip
-  nameserver: ['8.8.8.8','1.1.1.1']
+  fake-ip-range: 198.18.0.1/16
+  use-hosts: true
+  fake-ip-filter:
+    - +.lan
+    - +.local
+    - localhost.ptlogin2.qq.com
+    - +.msftconnecttest.com
+    - +.msftncsi.com
+  nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  default-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  proxy-server-nameserver:
+    - 223.5.5.5
+    - 119.29.29.29
+  fallback:
+    - 'https://1.0.0.1/dns-query'
+    - 'https://9.9.9.10/dns-query'
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+    ipcidr:
+      - 240.0.0.0/4
+tun:
+  enable: true
+  stack: system
+  auto-route: true
+  auto-detect-interface: true
+  strict-route: false
+  dns-hijack:
+    - 'any:53'
+  device: SakuraiTunnel
+  endpoint-independent-nat: true
+
 proxies:
 <BIAOSUB_PROXIES>
+
 proxy-groups:
-  - name: 🚀 节点选择
+  - name: 主代理
     type: select
     proxies:
 <BIAOSUB_GROUP_ALL>
+
 rules:
-  - MATCH,🚀 节点选择`
+  - RULE-SET,private_ip,DIRECT,no-resolve
+  - RULE-SET,cn_ip,DIRECT
+  - RULE-SET,cn_domain,DIRECT
+  - RULE-SET,geolocation-!cn,主代理
+  - MATCH,主代理`
 
         const { allNodes, sourceCount } = await getAllNodes(c.env)
-
         if (allNodes.length === 0) {
              allNodes.push({name: `⛔️ 无节点 (源:${sourceCount})`, type: "ss", server: "127.0.0.1", port: 80, cipher: "aes-128-gcm", password: "error"})
         }
@@ -340,81 +366,59 @@ rules:
         }).join("\n");
 
         const groupsYaml = allNodes.map(n => `      - ${smartStr(n.name)}`).join("\n");
+        const finalYaml = template.replace(/^\s*<BIAOSUB_PROXIES>/gm, proxiesYaml).replace(/^\s*<BIAOSUB_GROUP_ALL>/gm, groupsYaml);
 
-        const finalYaml = template
-            .replace(/^\s*<BIAOSUB_PROXIES>/gm, proxiesYaml)
-            .replace(/^\s*<BIAOSUB_GROUP_ALL>/gm, groupsYaml);
-
-        return c.text(finalYaml, 200, {
-            'Content-Type': 'text/yaml; charset=utf-8',
-            'Content-Disposition': 'attachment; filename="biaosub_clash.yaml"'
-        })
-
-    } catch(e) {
-        return c.text(`Internal Error: ${e.message}`, 500)
-    }
+        return c.text(finalYaml, 200, { 'Content-Type': 'text/yaml; charset=utf-8', 'Content-Disposition': 'attachment; filename="biaosub_clash.yaml"' })
+    } catch(e) { return c.text(`Error: ${e.message}`, 500) }
 })
 
-// B. Base64 通用订阅接口
+// B. Base64 订阅
 app.get('/subscribe/base64', async (c) => {
     try {
         const token = c.req.query('token')
         if (token !== c.env.ADMIN_PASSWORD) return c.text('Unauthorized', 401)
-        
         const { allNodes } = await getAllNodes(c.env)
         const links = allNodes.map(n => n.link || "").filter(l => l !== "")
-        
-        // 使用 safeBase64Decode 的逆操作 safeBtoa (简单版)
         const finalString = links.join('\n')
-        // 处理 UTF-8 到 Base64
-        const base64Result = btoa(encodeURIComponent(finalString).replace(/%([0-9A-F]{2})/g,
-            function toSolidBytes(match, p1) {
-                return String.fromCharCode('0x' + p1);
-        }));
-
-        return c.text(base64Result, 200, {
-            'Content-Type': 'text/plain; charset=utf-8'
-        })
-    } catch(e) {
-        return c.text(`Error: ${e.message}`, 500)
-    }
+        const base64Result = btoa(encodeURIComponent(finalString).replace(/%([0-9A-F]{2})/g, (match, p1) => String.fromCharCode('0x' + p1)));
+        return c.text(base64Result, 200, { 'Content-Type': 'text/plain; charset=utf-8' })
+    } catch(e) { return c.text(`Error: ${e.message}`, 500) }
 })
 
-// C. 检查接口
+// C. Check 接口 (修复流量提取)
 app.post('/check', async (c) => {
   try {
     const { url, type, needNodes, ua } = await c.req.json()
     if (!url) return c.json({ success: false, error: '链接为空' })
     let resultData = { valid: false, nodeCount: 0, stats: null, location: null, nodes: [] }
-    
-    // 1. 检查单节点
+    const userAgent = ua || 'v2rayNG/1.8.5'
+
     if (type === 'node') {
       const nodeList = parseNodesCommon(url)
-      if (nodeList.length === 0) return c.json({ success: false, error: '未检测到有效节点' })
-      resultData.valid = true
-      resultData.nodeCount = nodeList.length
-      if (needNodes) resultData.nodes = nodeList
-      try {
-        if (nodeList[0].server) {
-           resultData.location = await getGeoInfo(nodeList[0].server)
-        }
-      } catch(e) {}
+      if (nodeList.length === 0) return c.json({ success: false, error: '无有效节点' })
+      resultData.valid = true; resultData.nodeCount = nodeList.length; if (needNodes) resultData.nodes = nodeList
+      try { if (nodeList[0].server) resultData.location = await getGeoInfo(nodeList[0].server) } catch(e) {}
       return c.json({ success: true, data: resultData })
     }
 
-    // 2. 检查订阅
-    const userAgent = ua || 'v2rayNG/1.8.5'
-    const res = await fetchWithRetry(url, { headers: { 'User-Agent': userAgent } })
-    if (!res || !res.ok) return c.json({ success: false, error: `连接失败: ${res?res.status:0}` })
+    const [clashRes, v2rayRes] = await Promise.all([
+      fetchWithRetry(url, { headers: { 'User-Agent': 'Clash/1.0' } }).catch(e => null),
+      fetchWithRetry(url, { headers: { 'User-Agent': userAgent } }).catch(e => null)
+    ])
+    const validRes = clashRes || v2rayRes
+    if (!validRes || !validRes.ok) return c.json({ success: false, error: `连接失败: ${validRes?validRes.status:0}` })
 
-    // 提取流量信息
-    const infoHeader = res.headers.get('subscription-userinfo')
+    // 修复：尝试读取大小写不同的 header
+    const h = validRes.headers
+    const infoHeader = h.get('subscription-userinfo') || h.get('Subscription-Userinfo') || h.get('SUBSCRIPTION-USERINFO')
+    
     if (infoHeader) {
       const info = {}
       infoHeader.split(';').forEach(part => {
         const [key, value] = part.trim().split('=')
         if(key && value) info[key] = Number(value)
       })
+      // 只要有 total 就算有流量信息
       if (info.total) {
         const used = (info.upload || 0) + (info.download || 0)
         resultData.stats = {
@@ -429,17 +433,15 @@ app.post('/check', async (c) => {
       }
     }
 
-    const text = await res.text()
+    const text = await validRes.text()
     const nodeList = parseNodesCommon(text)
-    resultData.valid = true
-    resultData.nodeCount = nodeList.length
-    if (needNodes) resultData.nodes = nodeList
+    resultData.valid = true; resultData.nodeCount = nodeList.length; if (needNodes) resultData.nodes = nodeList
     return c.json({ success: true, data: resultData })
 
   } catch (e) { return c.json({ success: false, error: e.message }) }
 })
 
-// D. CRUD 接口 (保持精简完整)
+// D. CRUD 接口
 app.get('/subs', async (c) => {
   if (!c.env.DB) return c.json({ error: 'DB未绑定' }, 500)
   const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all()

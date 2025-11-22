@@ -51,7 +51,6 @@ const getGeoInfo = async (host) => {
   return null
 }
 
-// 安全的 Base64 解码
 const safeBase64Decode = (str) => {
     if (!str) return '';
     try {
@@ -63,15 +62,12 @@ const safeBase64Decode = (str) => {
     }
 }
 
-// 深度递归 Base64 解码
 const deepBase64Decode = (str, depth = 0) => {
     if (depth > 3) return str;
     if (!str || typeof str !== 'string') return str;
     try {
         const clean = str.replace(/\s/g, '');
         if (!/^[A-Za-z0-9+/=_:-]+$/.test(clean) || clean.length < 10) return str;
-        
-        // 排除明显不是 Base64 的内容 (例如 YAML 关键字)
         if (clean.includes('proxies:') || clean.includes('mixed-port:')) return str;
 
         let safeStr = clean.replace(/-/g, '+').replace(/_/g, '/');
@@ -116,50 +112,28 @@ const extractUserInfo = (headers) => {
     };
 }
 
-// --- 智能 Fetch (核心修复：防止HTML干扰和跳动) ---
 const fetchWithSmartUA = async (url) => {
   const userAgents = [
-    'ClashMeta/1.0',        // 优先级最高，通常返回最规范的配置
-    'v2rayNG/1.8.5',        // 兼容性好
-    'Clash/1.0',
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' // 浏览器兜底
+    'ClashMeta/1.0', 'v2rayNG/1.8.5', 'Clash/1.0',
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
   ];
-
   let bestRes = null;
-  let bestText = null;
-
   for (const ua of userAgents) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 12000); // 延长超时到12秒
-      
-      const res = await fetch(url, { 
-          headers: { 'User-Agent': ua, 'Accept': '*/*' }, 
-          signal: controller.signal 
-      });
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      const res = await fetch(url, { headers: { 'User-Agent': ua, 'Accept': '*/*' }, signal: controller.signal });
       clearTimeout(timeoutId);
-
       if (res.ok) {
-        // 立即克隆流以读取文本
         const clone = res.clone();
         const text = await clone.text();
-        
-        // 检查是否是无效的 HTML 页面 (防止“跳动”问题的核心)
-        if (text.includes('<!DOCTYPE html>') || text.includes('<html') || text.includes('Login')) {
-            // 如果是 HTML，说明这个 UA 被拦截或返回了网页，跳过
-            continue;
-        }
-
-        // 如果内容有效，检查是否有流量头
+        if (text.includes('<!DOCTYPE html>') || text.includes('<html') || text.includes('Login')) continue;
         const info = extractUserInfo(res.headers);
         if (info) {
-            // 完美情况：有流量头且不是 HTML
             Object.defineProperty(res, 'trafficInfo', { value: info, writable: true });
             Object.defineProperty(res, 'prefetchedText', { value: text, writable: true });
             return res;
         }
-
-        // 如果没有流量头，但内容看起来有效，先存起来
         if (!bestRes) {
             bestRes = res;
             Object.defineProperty(bestRes, 'prefetchedText', { value: text, writable: true });
@@ -178,43 +152,29 @@ const safeStr = (str) => {
 }
 const smartStr = safeStr;
 
-// --- 3. 核心解析逻辑 (完全重写) ---
+// --- 3. 核心解析逻辑 ---
 
-// 暴力流式 YAML 解析 (解决正则匹配不到的问题)
 const parseYamlProxies = (content) => {
     const nodes = [];
     if (!content) return nodes;
-
-    // 1. 尝试找到 proxies 列表的开始位置
-    // 兼容 proxies:, Proxy:, 以及没有缩进的情况
     const lines = content.split(/\r?\n/);
     let inProxyBlock = false;
-    let currentBlock = "";
-    
-    // 辅助解析单行 YAML 对象
     const parseLineObj = (line) => {
-        // 简单的键值对提取
         const getVal = (k) => {
             const reg = new RegExp(`${k}:\\s*(?:['"](.*?)['"]|(.*?))(?:$|,|\\}|\\n)`, 'i');
             const m = line.match(reg);
             return m ? (m[1] || m[2]).trim() : undefined;
         };
-        
-        // 如果是 { name: ... } 格式
         let type = getVal('type');
         let server = getVal('server');
         let port = getVal('port');
         let name = getVal('name');
-
-        // 补救：如果没提取到，尝试 loose regex
         if (!type) {
              if (line.includes('ss')) type = 'ss';
              else if (line.includes('vmess')) type = 'vmess';
              else if (line.includes('trojan')) type = 'trojan';
         }
-
         if (type && server && port) {
-             // 基础字段存在，构建节点
              const node = {
                 name: name || `${type}-${server}`,
                 type, server, port,
@@ -232,54 +192,23 @@ const parseYamlProxies = (content) => {
             nodes.push(node);
         }
     }
-
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
         if (!line) continue;
-
-        // 检测块开始
-        if (/^(proxies|Proxy):/i.test(line)) {
-            inProxyBlock = true;
-            continue;
-        }
-        // 检测块结束 (遇到 proxy-groups, rules 等)
-        if (/^(proxy-groups|rules|rule-providers):/i.test(line)) {
-            inProxyBlock = false;
-            break; // 代理块结束，停止扫描
-        }
-
-        // 如果在块内，查找列表项
+        if (/^(proxies|Proxy):/i.test(line)) { inProxyBlock = true; continue; }
+        if (/^(proxy-groups|rules|rule-providers):/i.test(line)) { inProxyBlock = false; break; }
         if (inProxyBlock) {
-            // 情况A: 列表项以 "- " 开头
             if (line.startsWith('-')) {
-                // 如果之前有累积的块，先解析之前的（这里简化处理，假设一行一个节点或者紧凑格式）
-                if (line.includes('{') && line.includes('}')) {
-                    // 行内对象: - { name: ... }
-                    parseLineObj(line);
-                } else {
-                    // 多行对象，这里简化处理：
-                    // 很多机场虽然是多行，但关键信息通常在一行，或者我们尝试合并
-                    // 鉴于 JS 正则的局限性，我们主要针对行内对象优化。
-                    // 对于标准多行 YAML，尝试提取 name, server, port
-                    // 如果这一行包含 name 和 server，那它就是个紧凑行
-                    if (line.includes('name:') && line.includes('server:')) {
-                        parseLineObj(line);
-                    } else {
-                        // 这是一个复杂的多行节点，收集它直到下一个 -
-                        // 由于复杂性，这里尝试简单提取
-                        // TODO: 实现完整状态机太复杂，这里做一个假设：
-                        // 如果无法单行解析，则跳过，或者后续增加多行逻辑。
-                        // 大部分订阅转换出的 Clash 都是单行对象或紧凑对象。
-                        
-                        // 补救：尝试在当前行及后几行寻找关键信息
-                        let tempObj = line;
-                        let j = 1;
-                        while (i + j < lines.length && !lines[i+j].trim().startsWith('-')) {
-                             tempObj += " " + lines[i+j].trim();
-                             j++;
-                        }
-                        parseLineObj(tempObj);
+                if (line.includes('{') && line.includes('}')) parseLineObj(line);
+                else if (line.includes('name:') && line.includes('server:')) parseLineObj(line);
+                else {
+                    let tempObj = line;
+                    let j = 1;
+                    while (i + j < lines.length && !lines[i+j].trim().startsWith('-')) {
+                         tempObj += " " + lines[i+j].trim();
+                         j++;
                     }
+                    parseLineObj(tempObj);
                 }
             }
         }
@@ -290,27 +219,16 @@ const parseYamlProxies = (content) => {
 const parseNodesCommon = (text) => {
     if (!text) return [];
     let nodes = [];
-
-    // 1. 优先尝试 Deep Decode (处理 Base64 套 Base64)
     let decodedText = deepBase64Decode(text);
-
-    // 2. 尝试 YAML 解析 (Clash)
-    // 只要包含 proxies: 或 - name: 就尝试
     if (decodedText.includes('proxies:') || decodedText.includes('Proxy:') || decodedText.includes('- name:')) {
         const yamlNodes = parseYamlProxies(decodedText);
         if (yamlNodes.length > 0) return yamlNodes;
     }
-
-    // 3. 通用链接解析 (VMess, VLESS, etc.)
-    // 强制换行修复单行多链接
     const splitText = decodedText.replace(/(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//gi, '\n$1://');
     const lines = splitText.split(/\r?\n/);
-    
     for (const line of lines) {
         const trimLine = line.trim();
         if (!trimLine || trimLine.length < 10) continue;
-
-        // VMess
         if (trimLine.startsWith('vmess://')) {
             try {
                 const b64 = trimLine.substring(8);
@@ -325,8 +243,6 @@ const parseNodesCommon = (text) => {
             } catch (e) {}
             continue;
         }
-
-        // URL Scheme
         if (/^(vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|https?):\/\//i.test(trimLine)) {
             try {
                 const protocol = trimLine.split(':')[0].toLowerCase();
@@ -335,11 +251,9 @@ const parseNodesCommon = (text) => {
                 if (hashIndex !== -1) {
                     try { name = decodeURIComponent(trimLine.substring(hashIndex + 1)) } catch (e) { name = trimLine.substring(hashIndex + 1) }
                 }
-                
                 const safeUrl = trimLine.split('#')[0]; 
                 const urlObj = new URL(safeUrl);
                 const params = urlObj.searchParams;
-                
                 const node = {
                     name, type: protocol, link: trimLine,
                     server: urlObj.hostname, port: urlObj.port, uuid: urlObj.username, password: urlObj.username || urlObj.password,
@@ -348,7 +262,6 @@ const parseNodesCommon = (text) => {
                     cipher: protocol === 'ss' ? urlObj.username : "auto",
                     "ws-opts": params.get("type")==="ws" ? { path: params.get("path")||"/", headers: { Host: params.get("host")||"" } } : undefined
                 };
-
                 if (protocol === 'ss' && !trimLine.includes('@')) {
                      const b64 = trimLine.split('://')[1].split('#')[0];
                      const decodedSS = safeBase64Decode(b64);
@@ -359,27 +272,23 @@ const parseNodesCommon = (text) => {
                         node.server=s; node.port=po; node.cipher=m; node.password=p;
                      }
                 }
-                
                 if (node.server && node.port) nodes.push(node);
             } catch(e) {}
         }
     }
-    
-    // 4. 最后的兜底：如果全是 Base64 且没解析出东西，尝试把整个文本作为单行再解一次
     if (nodes.length === 0 && !text.includes('proxies:')) {
          const retry = safeBase64Decode(text);
          if (retry !== text) return parseNodesCommon(retry);
     }
-
     return nodes;
 }
 
-// --- 4. API 路由 ---
+// --- 4. API 路由 (修复：去重逻辑) ---
 
 async function getAllNodes(env) {
     const { results: subs } = await env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1 ORDER BY sort_order ASC, id DESC").all()
     let allNodes = []
-    let uniqueKeys = new Set()
+    let uniqueKeys = new Set() // 使用 Set 存储完整链接，而非仅 IP+端口
     let sourceCount = 0
 
     for (const sub of subs) {
@@ -393,7 +302,6 @@ async function getAllNodes(env) {
             try {
                 const res = await fetchWithSmartUA(sub.url)
                 if (res && res.ok) {
-                    // 优先使用预取的内容，避免二次读取流
                     rawContent = res.prefetchedText || await res.text()
                 }
             } catch(e) {}
@@ -402,13 +310,20 @@ async function getAllNodes(env) {
         
         const nodes = parseNodesCommon(rawContent)
         for (const node of nodes) {
-            const key = `${node.server}:${node.port}`
+            // 修复：不再使用 server:port 作为唯一键
+            // 改为使用完整链接(link)作为唯一键，这样能区分同一 IP 不同端口/UUID 的节点
+            const key = node.link || `${node.server}:${node.port}:${node.uuid||''}:${node.password||''}`;
+            
             if (uniqueKeys.has(key)) continue
+            
             if (allowedNames && !allowedNames.has(node.name.trim())) continue
+            
+            // 处理重名
             let finalName = node.name.trim()
             let counter = 1
             while (allNodes.some(n => n.name === finalName)) finalName = `${node.name} ${counter++}`
             node.name = finalName
+            
             uniqueKeys.add(key)
             allNodes.push(node)
         }
@@ -601,7 +516,6 @@ app.post('/check', async (c) => {
         resultData.stats = validRes.trafficInfo;
     }
 
-    // 使用 fetchWithSmartUA 预取的内容，避免流已读错误
     const text = validRes.prefetchedText || await validRes.text()
     const nodeList = parseNodesCommon(text)
     

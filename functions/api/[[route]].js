@@ -18,7 +18,10 @@ app.use('/*', async (c, next) => {
   await next()
 })
 
-app.onError((err, c) => c.json({ error: err.message }, 500))
+app.onError((err, c) => {
+  console.error(`${err}`)
+  return c.json({ error: err.message }, 500)
+})
 
 // --- 2. 工具函数 ---
 
@@ -41,12 +44,14 @@ const getGeoInfo = async (host) => {
     if (!host || host.match(/^(127\.|192\.168\.|10\.|localhost)/)) return null;
     const res = await fetch(`http://ip-api.com/json/${host}?fields=status,country,countryCode,query`)
     const data = await res.json()
-    if (data.status === 'success') return { country: data.country, code: data.countryCode, ip: data.query }
+    if (data.status === 'success') {
+      return { country: data.country, code: data.countryCode, ip: data.query }
+    }
   } catch (e) {}
   return null
 }
 
-// 智能 Fetch
+// 智能 Fetch：优先获取流量信息，获取不到则换 UA
 const fetchWithSmartUA = async (url) => {
   const userAgents = [
     'Clash/1.0',
@@ -68,6 +73,7 @@ const fetchWithSmartUA = async (url) => {
       clearTimeout(timeoutId);
 
       if (res.ok) {
+        // 尝试提取流量信息
         const info = extractUserInfo(res.headers);
         if (info) {
             Object.defineProperty(res, 'trafficInfo', { value: info, writable: true });
@@ -106,13 +112,10 @@ const extractUserInfo = (headers) => {
 
 // 深度递归 Base64 解码
 const deepBase64Decode = (str, depth = 0) => {
-    if (depth > 3) return str;
+    if (depth > 3) return str; // 防止死循环
     try {
         const clean = str.replace(/\s/g, '');
-        // 只有当全是 Base64 字符时才尝试解码
-        if (!/^[A-Za-z0-9+/=]+$/.test(clean) || clean.length < 20) return str;
-        
-        // 避免把 UUID 等短字符串误判为 Base64
+        if (!/^[A-Za-z0-9+/=]+$/.test(clean) || clean.length < 10) return str;
         if (clean.includes('-') || clean.includes('_') || clean.includes(':')) return str;
 
         let padded = clean;
@@ -123,10 +126,9 @@ const deepBase64Decode = (str, depth = 0) => {
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
         const decoded = new TextDecoder('utf-8').decode(bytes);
         
-        // 验证解码结果是否更有意义
-        if (/[\uFFFD]/.test(decoded) && decoded.length > 10) return str; // 乱码回退
-        
-        // 递归尝试
+        if (decoded.includes('://') || decoded.includes('proxies:') || decoded.includes('server:')) {
+            return decoded;
+        }
         return deepBase64Decode(decoded, depth + 1);
     } catch (e) {
         return str;
@@ -134,24 +136,21 @@ const deepBase64Decode = (str, depth = 0) => {
 }
 
 const safeStr = (str) => {
-    if (!str) return '""';
-    const s = String(str).trim();
-    if (/[:#\[\]\{\},&*!|>'%@]/.test(s) || /^\s|\s$/.test(s)) return JSON.stringify(s);
-    return s;
+    if (!str) return '""'
+    const s = String(str).trim()
+    if (/[:#\[\]\{\},&*!|>'%@]/.test(s) || /^\s|\s$/.test(s)) return JSON.stringify(s)
+    return s
 }
 
-// --- 3. 核心：暴力节点解析器 ---
+// --- 3. 核心解析逻辑 ---
 
-// 暴力 YAML 解析
 const parseYamlProxies = (content) => {
-    const nodes = [];
+    const nodes = []
     try {
-        // 提取 proxies 块
         const proxyMatch = content.match(/^(?:proxies|Proxy):\s*\n([\s\S]*?)(?:^(?:proxy-groups|rules|rule-providers):|\z)/m);
         if (!proxyMatch) return nodes;
         
         const blockContent = proxyMatch[1];
-        // 按行首的 - 分割
         const items = blockContent.split(/^[\t ]*-\s+/m);
         
         for (const item of items) {
@@ -191,31 +190,24 @@ const parseYamlProxies = (content) => {
     return nodes;
 }
 
-// 主解析入口
 const parseNodesCommon = (text) => {
     if (!text) return [];
     let nodes = [];
 
-    // 1. 尝试 YAML 解析
-    if (text.includes('proxies:') || text.includes('Proxy:')) {
-        nodes = parseYamlProxies(text);
+    // 1. 深度解码
+    let decodedText = deepBase64Decode(text);
+
+    // 2. 尝试 YAML
+    if (decodedText.includes('proxies:') || decodedText.includes('Proxy:')) {
+        nodes = parseYamlProxies(decodedText);
         if (nodes.length > 0) return nodes;
     }
 
-    // 2. 深度解码 (针对 Base64 套娃)
-    let decodedText = deepBase64Decode(text);
+    // 3. 强制分割 (修复核心：解决单行多节点问题)
+    // 这一步非常关键，它会强制在所有常见协议头前加换行符
+    const splitText = decodedText.replace(/(vmess|vless|ss|ssr|trojan|hysteria2?|tuic|juicity|naive|http|https):\/\//gi, '\n$1://');
     
-    // 3. 再次尝试 YAML 解析 (针对 Base64 后是 YAML 的情况)
-    if (decodedText.includes('proxies:') || decodedText.includes('Proxy:')) {
-        const retryNodes = parseYamlProxies(decodedText);
-        if (retryNodes.length > 0) return retryNodes;
-    }
-
-    // 4. 暴力分割解析 (核心改进：解决连在一起的节点)
-    // 将所有常见的协议头前面加上换行符，强行拆分
-    const splitText = decodedText.replace(/(vmess|vless|ss|ssr|trojan|hysteria2?):\/\//gi, '\n$1://');
     const lines = splitText.split(/\r?\n/);
-    
     const regex = /^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//i;
 
     for (const line of lines) {
@@ -238,12 +230,11 @@ const parseNodesCommon = (text) => {
             continue;
         }
 
-        // 通用 URL Scheme
+        // 通用链接
         if (trimLine.match(regex)) {
             const protocol = trimLine.split(':')[0].toLowerCase();
             let name = `${protocol}节点`;
             
-            // 尝试提取名称
             const hashIndex = trimLine.lastIndexOf('#');
             if (hashIndex !== -1) {
                 try { name = decodeURIComponent(trimLine.substring(hashIndex + 1)) } catch (e) { name = trimLine.substring(hashIndex + 1) }
@@ -251,7 +242,6 @@ const parseNodesCommon = (text) => {
             
             let details = {};
             try {
-                // 修复：处理 URL 中包含非标准字符导致 new URL 失败的情况
                 const safeUrl = trimLine.split('#')[0]; 
                 const urlObj = new URL(safeUrl);
                 const params = urlObj.searchParams;
@@ -264,11 +254,9 @@ const parseNodesCommon = (text) => {
                     "ws-opts": params.get("type")==="ws" ? { path: params.get("path")||"/", headers: { Host: params.get("host")||"" } } : undefined
                 };
 
-                // SS 特殊处理 (Base64 用户信息)
                 if (protocol === 'ss' && !trimLine.includes('@')) {
                      const b64 = trimLine.split('://')[1].split('#')[0];
                      const decodedSS = deepBase64Decode(b64);
-                     // aes-256-gcm:password@ip:port
                      if(decodedSS.includes(':') && decodedSS.includes('@')) {
                         const [mp, sp] = decodedSS.split('@');
                         const [m, p] = mp.split(':'); 
@@ -278,7 +266,6 @@ const parseNodesCommon = (text) => {
                 }
             } catch(e) {}
             
-            // 必须要有 server 和 port 才算有效节点
             if (details.server && details.port) {
                 nodes.push({ name, type: protocol, link: trimLine, ...details });
             }
@@ -517,6 +504,18 @@ app.post('/check', async (c) => {
     const text = await validRes.text()
     const nodeList = parseNodesCommon(text)
     
+    // 再次兜底：如果流量正常但无节点，说明 Base64 解析被单行卡住了，尝试强制 DeepDecode
+    if (nodeList.length === 0 && resultData.stats) {
+         const retryNodes = parseNodesCommon(safeBase64Decode(text));
+         if (retryNodes.length > 0) {
+             // 成功挽救
+             resultData.nodeCount = retryNodes.length;
+             if (needNodes) resultData.nodes = retryNodes;
+             resultData.valid = true;
+             return c.json({ success: true, data: resultData })
+         }
+    }
+
     resultData.valid = true; 
     resultData.nodeCount = nodeList.length; 
     if (needNodes) resultData.nodes = nodeList

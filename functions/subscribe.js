@@ -3,7 +3,7 @@ import { handle } from 'hono/cloudflare-pages'
 
 const app = new Hono()
 
-// --- 1. 核心工具函数 (与 API 保持一致) ---
+// --- 1. 核心工具函数 ---
 
 const safeBase64Decode = (str) => {
     if (!str) return '';
@@ -34,7 +34,6 @@ const deepBase64Decode = (str, depth = 0) => {
     } catch (e) { return str; }
 }
 
-// 智能抓取：防止被机场拦截
 const fetchWithSmartUA = async (url) => {
   const userAgents = ['ClashMeta/1.0', 'v2rayNG/1.8.5', 'Clash/1.0', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'];
   let bestRes = null;
@@ -47,7 +46,7 @@ const fetchWithSmartUA = async (url) => {
       if (res.ok) {
         const clone = res.clone();
         const text = await clone.text();
-        if (text.includes('<!DOCTYPE html>') || text.includes('<html')) continue; // 跳过网页干扰
+        if (text.includes('<!DOCTYPE html>') || text.includes('<html')) continue;
         
         Object.defineProperty(res, 'prefetchedText', { value: text, writable: true });
         return res;
@@ -108,13 +107,11 @@ const parseNodesCommon = (text) => {
     let nodes = [];
     let decoded = deepBase64Decode(text);
 
-    // 1. YAML 解析
     if (decoded.includes('proxies:') || decoded.includes('Proxy:') || decoded.includes('- name:')) {
         const yamlNodes = parseYamlProxies(decoded);
         if (yamlNodes.length > 0) return yamlNodes;
     }
 
-    // 2. 通用链接解析
     const splitText = decoded.replace(/(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//gi, '\n$1://');
     const lines = splitText.split(/\r?\n/);
     
@@ -122,9 +119,7 @@ const parseNodesCommon = (text) => {
         const trimLine = line.trim();
         if (!trimLine || trimLine.length < 10) continue;
         
-        // 简单链接提取
         if (/^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|https?):\/\//i.test(trimLine)) {
-             // 尝试提取名字用于白名单匹配
              let name = 'node';
              if (trimLine.startsWith('vmess://')) {
                  try { const c = JSON.parse(safeBase64Decode(trimLine.substring(8))); name = c.ps || name; } catch(e){}
@@ -148,11 +143,9 @@ app.get('/', async (c) => {
     let orderedLinks = []
 
     for (const sub of results) {
-      // 获取白名单
       let params = {}; try { params = sub.params ? JSON.parse(sub.params) : {} } catch(e) {}
       const allowedNames = (params.include && params.include.length > 0) ? new Set(params.include) : null
 
-      // 获取原始内容
       let rawContent = "";
       if (sub.type === 'node') {
           rawContent = sub.url;
@@ -163,21 +156,20 @@ app.get('/', async (c) => {
       
       if (!rawContent) continue;
 
-      // 使用增强解析器
       const nodes = parseNodesCommon(rawContent);
       
       for (const node of nodes) {
-          // 白名单过滤
+          // 核心修改：使用完整链接作为唯一键，防止同IP端口被误删
+          const key = node.link;
+          
+          if (uniqueLinks.has(key)) continue;
           if (allowedNames && !allowedNames.has(node.name.trim())) continue;
           
-          if (!uniqueLinks.has(node.link)) {
-              uniqueLinks.add(node.link);
-              orderedLinks.push(node.link);
-          }
+          uniqueLinks.add(key);
+          orderedLinks.push(node.link);
       }
     }
 
-    // Base64 输出
     const finalString = orderedLinks.join('\n')
     const base64Result = btoa(encodeURIComponent(finalString).replace(/%([0-9A-F]{2})/g, (match, p1) => String.fromCharCode('0x' + p1)));
 

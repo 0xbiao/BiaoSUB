@@ -9,6 +9,7 @@ app.use('/*', cors())
 // --- 1. 鉴权中间件 ---
 app.use('/*', async (c, next) => {
   const path = c.req.path
+  // 允许登录接口和部分订阅接口跳过鉴权
   if (path.endsWith('/login') || path.includes('/subscribe')) return await next()
   
   const authHeader = c.req.header('Authorization')
@@ -35,13 +36,16 @@ const formatBytes = (bytes) => {
 
 const formatDate = (timestamp) => {
   if (!timestamp || isNaN(timestamp)) return '长期'
+  // 自动判断秒还是毫秒
   const date = new Date(timestamp.toString().length === 10 ? timestamp * 1000 : timestamp)
-  return date.toLocaleDateString()
+  return date.toLocaleDateString('zh-CN')
 }
 
 const getGeoInfo = async (host) => {
   try {
+    // 过滤内网IP和本地回环
     if (!host || host.match(/^(127\.|192\.168\.|10\.|localhost)/)) return null;
+    // 使用 ip-api 获取位置信息
     const res = await fetch(`http://ip-api.com/json/${host}?fields=status,country,countryCode,query`)
     const data = await res.json()
     if (data.status === 'success') {
@@ -51,10 +55,69 @@ const getGeoInfo = async (host) => {
   return null
 }
 
+// --- 核心修复：安全的 Base64 解码函数 ---
+// 这是之前报错缺少的函数，用于处理简单的 Base64 字符串
+const safeBase64Decode = (str) => {
+    if (!str) return '';
+    try {
+        // 1. 处理 URL Safe 字符 (- -> +, _ -> /)
+        // 2. 去除空格
+        let clean = str.replace(/-/g, '+').replace(/_/g, '/').replace(/\s/g, '');
+        // 3. 补全 Padding (=)
+        while (clean.length % 4) clean += '=';
+        
+        // 4. 使用 decodeURIComponent + escape 解决中文乱码问题
+        return decodeURIComponent(escape(atob(clean)));
+    } catch (e) {
+        // 如果标准解码失败，尝试直接返回（有时是明文）
+        return str;
+    }
+}
+
+// 深度递归 Base64 解码 (增强版)
+const deepBase64Decode = (str, depth = 0) => {
+    if (depth > 3) return str; // 防止死循环
+    if (!str || typeof str !== 'string') return str;
+
+    try {
+        // 预处理：去除空白
+        const clean = str.replace(/\s/g, '');
+        
+        // 快速检查：如果包含明显非Base64字符且不含URL-safe字符，直接返回
+        // 注意：原版代码在这里直接return了带-或_的字符串，这是错误的，应该先替换再尝试解码
+        if (!/^[A-Za-z0-9+/=_:-]+$/.test(clean) || clean.length < 10) return str;
+
+        // 替换 URL Safe 字符
+        let safeStr = clean.replace(/-/g, '+').replace(/_/g, '/');
+        while (safeStr.length % 4) safeStr += '=';
+        
+        // 尝试解码
+        const binary = atob(safeStr);
+        
+        // 转换为 Uint8Array 以处理 UTF-8
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const decoded = new TextDecoder('utf-8').decode(bytes);
+        
+        // 检查解码结果是否看起来像是一个新的链接或配置
+        if (decoded.includes('://') || decoded.includes('proxies:') || decoded.includes('server:') || decoded.includes('"add":')) {
+            return decoded;
+        }
+        
+        // 递归尝试
+        return deepBase64Decode(decoded, depth + 1);
+    } catch (e) {
+        return str;
+    }
+}
+
 // 智能 Fetch：优先获取流量信息，获取不到则换 UA
 const fetchWithSmartUA = async (url) => {
+  // 增强了 UA 列表，增加 Clash Meta 和 Stash，这些客户端通常能获取到正确的 Header
   const userAgents = [
     'Clash/1.0',
+    'ClashMeta/2.11', // 增加 Meta
+    'Stash/2.4',      // 增加 Stash
     'v2rayNG/1.8.5',
     'Quantumult%20X/1.0.30',
     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -65,9 +128,13 @@ const fetchWithSmartUA = async (url) => {
   for (const ua of userAgents) {
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10秒超时
+      
       const res = await fetch(url, { 
-          headers: { 'User-Agent': ua, 'Accept': '*/*' }, 
+          headers: { 
+              'User-Agent': ua, 
+              'Accept': '*/*' 
+          }, 
           signal: controller.signal 
       });
       clearTimeout(timeoutId);
@@ -76,63 +143,50 @@ const fetchWithSmartUA = async (url) => {
         // 尝试提取流量信息
         const info = extractUserInfo(res.headers);
         if (info) {
+            // 如果拿到了流量信息，直接挂载到 res 对象上并返回
             Object.defineProperty(res, 'trafficInfo', { value: info, writable: true });
             return res;
         }
+        // 如果没拿到流量信息，暂时存为 bestRes，继续尝试下一个 UA
         if (!bestRes) bestRes = res;
       }
     } catch (e) {}
   }
+  // 如果所有 UA 都拿不到流量信息，返回第一个成功的响应
   return bestRes;
 }
 
 const extractUserInfo = (headers) => {
     let infoStr = null;
+    // 遍历 headers，不区分大小写查找 subscription-userinfo
     headers.forEach((val, key) => {
         if (key.toLowerCase().includes('userinfo')) infoStr = val;
     });
+    
     if (!infoStr) return null;
+
     const info = {};
+    // 解析格式: upload=123; download=456; total=789; expire=999
     infoStr.split(';').forEach(part => {
         const [key, value] = part.trim().split('=');
-        if (key && value) info[key] = Number(value);
+        if (key && value) info[key.trim().toLowerCase()] = Number(value);
     });
-    if (!info.total) return null;
+
+    // 只要有 total 或者 (upload+download) 就认为有效
+    if (!info.total && !info.upload && !info.download) return null;
+
     const used = (info.upload || 0) + (info.download || 0);
+    const total = info.total || 0;
+    
     return {
         used: formatBytes(used),
-        total: formatBytes(info.total),
-        expire: formatDate(info.expire),
-        percent: Math.min(100, Math.round((used / info.total) * 100)),
+        total: total ? formatBytes(total) : '无限制',
+        expire: info.expire ? formatDate(info.expire) : '长期',
+        percent: total ? Math.min(100, Math.round((used / total) * 100)) : 0,
         raw_expire: info.expire,
         raw_used: used,
-        raw_total: info.total
+        raw_total: total
     };
-}
-
-// 深度递归 Base64 解码
-const deepBase64Decode = (str, depth = 0) => {
-    if (depth > 3) return str; // 防止死循环
-    try {
-        const clean = str.replace(/\s/g, '');
-        if (!/^[A-Za-z0-9+/=]+$/.test(clean) || clean.length < 10) return str;
-        if (clean.includes('-') || clean.includes('_') || clean.includes(':')) return str;
-
-        let padded = clean;
-        while (padded.length % 4) padded += '=';
-        
-        const binary = atob(padded);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        const decoded = new TextDecoder('utf-8').decode(bytes);
-        
-        if (decoded.includes('://') || decoded.includes('proxies:') || decoded.includes('server:')) {
-            return decoded;
-        }
-        return deepBase64Decode(decoded, depth + 1);
-    } catch (e) {
-        return str;
-    }
 }
 
 const safeStr = (str) => {
@@ -141,16 +195,19 @@ const safeStr = (str) => {
     if (/[:#\[\]\{\},&*!|>'%@]/.test(s) || /^\s|\s$/.test(s)) return JSON.stringify(s)
     return s
 }
+const smartStr = safeStr; // 兼容原有调用
 
 // --- 3. 核心解析逻辑 ---
 
 const parseYamlProxies = (content) => {
     const nodes = []
     try {
+        // 匹配 proxies: 下的内容
         const proxyMatch = content.match(/^(?:proxies|Proxy):\s*\n([\s\S]*?)(?:^(?:proxy-groups|rules|rule-providers):|\z)/m);
         if (!proxyMatch) return nodes;
         
         const blockContent = proxyMatch[1];
+        // 按 - 分割
         const items = blockContent.split(/^[\t ]*-\s+/m);
         
         for (const item of items) {
@@ -194,10 +251,10 @@ const parseNodesCommon = (text) => {
     if (!text) return [];
     let nodes = [];
 
-    // 1. 深度解码
+    // 1. 深度解码 (Deep Decode)
     let decodedText = deepBase64Decode(text);
 
-    // 2. 尝试 YAML
+    // 2. 尝试 YAML 解析
     if (decodedText.includes('proxies:') || decodedText.includes('Proxy:')) {
         nodes = parseYamlProxies(decodedText);
         if (nodes.length > 0) return nodes;
@@ -205,7 +262,7 @@ const parseNodesCommon = (text) => {
 
     // 3. 强制分割 (修复核心：解决单行多节点问题)
     // 这一步非常关键，它会强制在所有常见协议头前加换行符
-    const splitText = decodedText.replace(/(vmess|vless|ss|ssr|trojan|hysteria2?|tuic|juicity|naive|http|https):\/\//gi, '\n$1://');
+    const splitText = decodedText.replace(/(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//gi, '\n$1://');
     
     const lines = splitText.split(/\r?\n/);
     const regex = /^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//i;
@@ -214,11 +271,12 @@ const parseNodesCommon = (text) => {
         const trimLine = line.trim();
         if (!trimLine || trimLine.length < 10) continue;
 
-        // VMess
+        // VMess 协议处理
         if (trimLine.startsWith('vmess://')) {
             try {
                 const b64 = trimLine.substring(8);
-                const jsonStr = deepBase64Decode(b64);
+                // 使用 safeBase64Decode 进行解码
+                const jsonStr = safeBase64Decode(b64);
                 const conf = JSON.parse(jsonStr);
                 nodes.push({
                     name: conf.ps || 'vmess', type: 'vmess', link: trimLine,
@@ -230,7 +288,7 @@ const parseNodesCommon = (text) => {
             continue;
         }
 
-        // 通用链接
+        // 通用链接处理 (SS, VLESS, Trojan, etc.)
         if (trimLine.match(regex)) {
             const protocol = trimLine.split(':')[0].toLowerCase();
             let name = `${protocol}节点`;
@@ -254,9 +312,10 @@ const parseNodesCommon = (text) => {
                     "ws-opts": params.get("type")==="ws" ? { path: params.get("path")||"/", headers: { Host: params.get("host")||"" } } : undefined
                 };
 
+                // 特殊处理 SS Legacy 格式 (base64 user:pass@ip:port)
                 if (protocol === 'ss' && !trimLine.includes('@')) {
                      const b64 = trimLine.split('://')[1].split('#')[0];
-                     const decodedSS = deepBase64Decode(b64);
+                     const decodedSS = safeBase64Decode(b64); // 使用 safeBase64Decode
                      if(decodedSS.includes(':') && decodedSS.includes('@')) {
                         const [mp, sp] = decodedSS.split('@');
                         const [m, p] = mp.split(':'); 
@@ -432,6 +491,7 @@ rules:
   - MATCH,主代理`
 
         const { allNodes, sourceCount } = await getAllNodes(c.env)
+        // 如果完全没有节点，生成一个假节点防止 Clash 报错
         if (allNodes.length === 0) {
              allNodes.push({name: `⛔️ 无节点 (源:${sourceCount})`, type: "ss", server: "127.0.0.1", port: 80, cipher: "aes-128-gcm", password: "error"})
         }
@@ -471,18 +531,20 @@ app.get('/subscribe/base64', async (c) => {
         const { allNodes } = await getAllNodes(c.env)
         const links = allNodes.map(n => n.link || "").filter(l => l !== "")
         const finalString = links.join('\n')
+        // 使用 safeBase64Decode 的反向逻辑（这里简单实现）
         const base64Result = btoa(encodeURIComponent(finalString).replace(/%([0-9A-F]{2})/g, (match, p1) => String.fromCharCode('0x' + p1)));
         return c.text(base64Result, 200, { 'Content-Type': 'text/plain; charset=utf-8' })
     } catch(e) { return c.text(`Error: ${e.message}`, 500) }
 })
 
-// C. Check 接口
+// C. Check 接口 (修复重点)
 app.post('/check', async (c) => {
   try {
     const { url, type, needNodes } = await c.req.json()
     if (!url) return c.json({ success: false, error: '链接为空' })
     let resultData = { valid: false, nodeCount: 0, stats: null, location: null, nodes: [] }
 
+    // 1. 如果直接是单个节点链接
     if (type === 'node') {
       const nodeList = parseNodesCommon(url)
       if (nodeList.length === 0) return c.json({ success: false, error: '未检测到有效节点' })
@@ -491,9 +553,11 @@ app.post('/check', async (c) => {
       return c.json({ success: true, data: resultData })
     }
 
+    // 2. 订阅链接处理
     const validRes = await fetchWithSmartUA(url);
     if (!validRes || !validRes.ok) return c.json({ success: false, error: `连接失败: ${validRes?validRes.status:0}` })
 
+    // 提取流量信息
     if (validRes.trafficInfo) {
         resultData.stats = validRes.trafficInfo;
     } else {
@@ -504,8 +568,9 @@ app.post('/check', async (c) => {
     const text = await validRes.text()
     const nodeList = parseNodesCommon(text)
     
-    // 再次兜底：如果流量正常但无节点，说明 Base64 解析被单行卡住了，尝试强制 DeepDecode
+    // 再次兜底：如果流量正常但无节点，说明 Base64 解析被单行卡住了，尝试强制解码
     if (nodeList.length === 0 && resultData.stats) {
+         // 这里之前报错 safeBase64Decode is not defined，现在已修复
          const retryNodes = parseNodesCommon(safeBase64Decode(text));
          if (retryNodes.length > 0) {
              // 成功挽救

@@ -226,7 +226,6 @@
             const searchText = ref(''); const filterType = ref('all')
             const showModal = ref(false); const isEditing = ref(false); const currentId = ref(null); const activeTab = ref('subscription'); 
             
-            // Form 增加 template 字段
             const form = ref({ name: '', url: '', params: { template: '' } }) 
             
             const showSettingsModal = ref(false); const settings = ref({}); const toast = ref({ show: false, message: '', type: 'success' })
@@ -234,7 +233,6 @@
             const checking = ref(false); const checkResult = ref(null); let sortableInstance = null
             const refreshingAll = ref(false); 
             
-            // 修复预览
             const previewModal = ref({ show: false, nodes: [] })
 
             const filteredItems = computed(() => items.value.filter(i => {
@@ -305,7 +303,6 @@
                 } catch (e) {} finally { loading.value = false }
             }
 
-            // 修复预览功能
             const previewNodes = async (item) => {
                 previewModal.value = { show: true, nodes: [] }
                 try {
@@ -343,7 +340,6 @@
                     const url = isEditing.value ? `${API_BASE}/subs/${currentId.value}` : `${API_BASE}/subs`
                     const method = isEditing.value ? 'PUT' : 'POST'
                     const info = checkResult.value?.success ? { stats: checkResult.value.stats, nodeCount: checkResult.value.nodeCount } : null
-                    // 确保 params 包含 template
                     const payload = { name: form.value.name, url: form.value.url, type: activeTab.value, info, params: form.value.params }
                     
                     const res = await authFetch(url, { method, body: JSON.stringify(payload) })

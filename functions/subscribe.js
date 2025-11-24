@@ -23,14 +23,12 @@ const deepBase64Decode = (str, depth = 0) => {
         let safeStr = clean.replace(/-/g, '+').replace(/_/g, '/');
         while (safeStr.length % 4) safeStr += '=';
         const decoded = new TextDecoder('utf-8').decode(Uint8Array.from(atob(safeStr), c => c.charCodeAt(0)));
-        if (decoded.includes('://') || decoded.includes('proxies:')) return decoded;
-        return deepBase64Decode(decoded, depth + 1);
+        if (decoded.includes('://') || decoded.includes('proxies:')) return deepBase64Decode(decoded, depth + 1);
+        return decoded;
     } catch (e) { return str; }
 }
 
-// --- 解析与生成 ---
-
-// 生成标准节点链接
+// --- 生成标准节点链接 ---
 const generateNodeLink = (node) => {
     try {
         const safe = (s) => encodeURIComponent(s || '');
@@ -59,23 +57,20 @@ const generateNodeLink = (node) => {
             
             if (node.type === 'trojan' && node.sni) params.push(`sni=${safe(node.sni)}`);
             if (node.type === 'vless' || node.type === 'trojan') params.push(`type=${node.network || 'tcp'}`);
-
             if (node.servername) params.push(`sni=${safe(node.servername)}`);
             if (node.flow) params.push(`flow=${node.flow}`);
             if (node['client-fingerprint']) params.push(`fp=${node['client-fingerprint']}`);
             if (node['skip-cert-verify']) params.push(`allowInsecure=1`);
-
+            
             if (node.network === 'ws' && node['ws-opts']) {
                 if (node['ws-opts'].path) params.push(`path=${safe(node['ws-opts'].path)}`);
                 if (node['ws-opts'].headers?.Host) params.push(`host=${safe(node['ws-opts'].headers.Host)}`);
             }
-
             if (node.reality) {
                 params.push(`security=reality`);
                 params.push(`pbk=${safe(node.reality.publicKey)}`);
                 params.push(`sid=${safe(node.reality.shortId)}`);
             }
-
             if (node.type === 'hysteria2') {
                 if (node.sni) params.push(`sni=${safe(node.sni)}`);
                 if (node.obfs) {
@@ -83,14 +78,12 @@ const generateNodeLink = (node) => {
                     params.push(`obfs-password=${safe(node['obfs-password'])}`);
                 }
             }
-
             if (node.type === 'tuic') {
                 if (node.sni) params.push(`sni=${safe(node.sni)}`);
                 if (node['congestion-controller']) params.push(`congestion_control=${node['congestion-controller']}`);
                 if (node['udp-relay-mode']) params.push(`udp_relay_mode=${node['udp-relay-mode']}`);
                 if (node.alpn) params.push(`alpn=${safe(node.alpn[0])}`);
             }
-
             link += params.join('&');
             link += `#${safe(node.name)}`;
             return link;
@@ -103,7 +96,7 @@ const generateNodeLink = (node) => {
     } catch (e) { return ''; }
 }
 
-// 解析器 (同步 API 逻辑)
+// --- 解析器 ---
 const parseYamlProxies = (content) => {
     const nodes = [];
     if (!content) return nodes;
@@ -139,7 +132,7 @@ const parseYamlProxies = (content) => {
             if (node.network === 'ws') {
                 node["ws-opts"] = { path: getVal('path')||'/', headers: { Host: getVal('host')||'' } };
             }
-            node.link = `${type}://${node.server}:${node.port}#${encodeURIComponent(node.name)}`;
+            node.link = generateNodeLink(node);
             nodes.push(node);
         }
     }
@@ -166,19 +159,15 @@ const parseYamlProxies = (content) => {
 const parseNodesCommon = (text) => {
     let nodes = [];
     let decoded = deepBase64Decode(text);
-    
     if (decoded.includes('proxies:') || decoded.includes('Proxy:') || decoded.includes('- name:')) {
         const yamlNodes = parseYamlProxies(decoded);
         if (yamlNodes.length > 0) return yamlNodes;
     }
-
     const splitText = decoded.replace(/(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//gi, '\n$1://');
     const lines = splitText.split(/\r?\n/);
-    
     for (const line of lines) {
         const trimLine = line.trim();
         if (!trimLine || trimLine.length < 10) continue;
-        
         try {
             if (trimLine.startsWith('vmess://')) {
                 const c = JSON.parse(safeBase64Decode(trimLine.substring(8)));
@@ -190,13 +179,11 @@ const parseNodesCommon = (text) => {
                 const params = url.searchParams;
                 const protocol = url.protocol.replace(':', '');
                 let node = { name: decodeURIComponent(url.hash.substring(1)), type: protocol==='hysteria'?'hysteria2':protocol, server: url.hostname, port: url.port, link: trimLine };
-                
                 if (url.username) {
                     if (protocol === 'ss') {
-                         try { const d = safeBase64Decode(url.username); if (d.includes(':')) { const [m, p] = d.split(':'); node.cipher = m; node.password = p; } else { node.cipher = url.username; node.password = url.password; } } catch(e) { node.cipher = url.username; node.password = url.password; }
+                        try { const d = safeBase64Decode(url.username); if (d.includes(':')) { const [m, p] = d.split(':'); node.cipher = m; node.password = p; } else { node.cipher = url.username; node.password = url.password; } } catch(e) { node.cipher = url.username; node.password = url.password; }
                     } else { node.uuid = url.username; node.password = url.password || url.username; }
                 }
-
                 node.tls = params.get('security')==='tls' || params.get('encryption')==='ssl' || protocol==='hysteria2' || protocol==='tuic';
                 node.network = params.get('type') || 'tcp';
                 node.sni = params.get('sni');
@@ -205,13 +192,11 @@ const parseNodesCommon = (text) => {
                 node.flow = params.get('flow');
                 node['client-fingerprint'] = params.get('fp');
                 if (params.get('alpn')) node.alpn = [params.get('alpn')];
-
                 if (node.network === 'ws') node['ws-opts'] = { path: params.get('path')||'/', headers: { Host: params.get('host')||node.servername } };
                 if (params.get('security') === 'reality') { node.tls = true; node.reality = { publicKey: params.get('pbk'), shortId: params.get('sid') }; if(!node['client-fingerprint']) node['client-fingerprint']='chrome'; }
                 if (node.type === 'hysteria2') { node.obfs = params.get('obfs'); node['obfs-password'] = params.get('obfs-password'); node.udp=true; }
                 if (node.type === 'tuic') { node['congestion-controller'] = params.get('congestion_control'); node['udp-relay-mode'] = params.get('udp_relay_mode'); node.udp=true; }
                 if ((node.type === 'vless' || node.type === 'trojan') && node.network === 'ws') node.udp = true;
-
                 nodes.push(node);
             }
         } catch(e) {}
@@ -219,23 +204,18 @@ const parseNodesCommon = (text) => {
     return nodes;
 }
 
-// --- 入口 ---
-
 app.get('/', async (c) => {
     try {
         if (!c.env.DB) return c.text('DB Error', 500)
         const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1 ORDER BY sort_order ASC, id DESC").all()
         let allLinks = []
-
         for (const sub of results) {
             let content = "";
             if (sub.type === 'node') content = sub.url;
             else { try { const res = await fetch(sub.url, {headers:{'User-Agent':'ClashMeta/1.0'}}); if(res.ok) content = await res.text(); } catch(e){} }
-            
             const nodes = parseNodesCommon(content);
             let params = {}; try { params = JSON.parse(sub.params) } catch(e) {}
             const allowed = params.include?.length ? new Set(params.include) : null;
-
             for (const node of nodes) {
                 if (allowed && !allowed.has(node.name)) continue;
                 allLinks.push(generateNodeLink(node));

@@ -40,12 +40,22 @@ const deepBase64Decode = (str, depth = 0) => {
     try {
         const clean = str.replace(/\s/g, '');
         if (!/^[A-Za-z0-9+/=_:-]+$/.test(clean) || clean.length < 10) return str;
-        if (clean.includes('proxies:') || clean.includes('mixed-port:')) return str;
+        // 排除 YAML 关键字，防止误判
+        if (clean.includes('proxies:') || clean.includes('mixed-port:') || clean.includes('proxy-groups:')) return str;
+        
         let safeStr = clean.replace(/-/g, '+').replace(/_/g, '/');
         while (safeStr.length % 4) safeStr += '=';
-        const decoded = new TextDecoder('utf-8').decode(Uint8Array.from(atob(safeStr), c => c.charCodeAt(0)));
-        if (decoded.includes('://') || decoded.includes('proxies:') || decoded.includes('server:')) return decoded;
-        return deepBase64Decode(decoded, depth + 1);
+        
+        const binary = atob(safeStr);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        const decoded = new TextDecoder('utf-8').decode(bytes);
+        
+        // 递归检测：如果解出来还是链接或配置，继续解
+        if (decoded.includes('://') || decoded.includes('proxies:') || decoded.includes('server:')) {
+            return deepBase64Decode(decoded, depth + 1);
+        }
+        return decoded;
     } catch (e) { return str; }
 }
 const safeStr = (str) => {
@@ -55,7 +65,7 @@ const safeStr = (str) => {
     return s
 }
 
-// --- 核心：生成标准的 Clash YAML 节点 ---
+// --- 核心：输出标准格式 (保留你需要的格式) ---
 const fmtClashProxy = (node) => {
     const props = [
         `name: ${safeStr(node.name)}`,
@@ -63,8 +73,7 @@ const fmtClashProxy = (node) => {
         `server: ${safeStr(node.server)}`,
         `port: ${node.port}`
     ];
-
-    // 通用字段
+    // 通用
     if (node.uuid) props.push(`uuid: ${safeStr(node.uuid)}`);
     if (node.password) props.push(`password: ${safeStr(node.password)}`);
     if (node.cipher) props.push(`cipher: ${node.cipher}`);
@@ -72,7 +81,7 @@ const fmtClashProxy = (node) => {
     if (node["skip-cert-verify"] !== undefined) props.push(`skip-cert-verify: ${node["skip-cert-verify"]}`);
     if (node.tfo !== undefined) props.push(`tfo: ${node.tfo}`);
 
-    // TLS 相关
+    // TLS
     if (node.tls) {
         props.push(`tls: true`);
         if (node.servername) props.push(`servername: ${safeStr(node.servername)}`);
@@ -80,17 +89,17 @@ const fmtClashProxy = (node) => {
         if (node["client-fingerprint"]) props.push(`client-fingerprint: ${node["client-fingerprint"]}`);
     }
 
-    // REALITY 专用
+    // REALITY
     if (node.reality) {
         props.push(`flow: ${node.flow || 'xtls-rprx-vision'}`);
         props.push(`reality-opts:`);
         props.push(`  public-key: ${node.reality.publicKey}`);
         if (node.reality.shortId) props.push(`  short-id: ${node.reality.shortId}`);
     } else if (node.flow) {
-        props.push(`flow: ${node.flow}`); // 普通 VLESS flow
+        props.push(`flow: ${node.flow}`);
     }
 
-    // 网络相关 (ws, grpc, tcp)
+    // Network (ws, grpc)
     if (node.network) {
         props.push(`network: ${node.network}`);
         if (node.network === 'ws' && node['ws-opts']) {
@@ -107,12 +116,8 @@ const fmtClashProxy = (node) => {
         }
     }
 
-    // Trojan 专用
-    if (node.type === 'trojan') {
-        if (node.sni) props.push(`sni: ${safeStr(node.sni)}`);
-    }
-
-    // Hysteria2 专用
+    // Trojan / Hysteria2 / TUIC 特有字段
+    if (node.type === 'trojan' && node.sni) props.push(`sni: ${safeStr(node.sni)}`);
     if (node.type === 'hysteria2') {
         if (node.sni) props.push(`sni: ${safeStr(node.sni)}`);
         if (node.obfs) {
@@ -120,107 +125,93 @@ const fmtClashProxy = (node) => {
             if (node['obfs-password']) props.push(`obfs-password: ${safeStr(node['obfs-password'])}`);
         }
     }
-
-    // TUIC 专用
     if (node.type === 'tuic') {
         if (node.sni) props.push(`sni: ${safeStr(node.sni)}`);
         if (node['udp-relay-mode']) props.push(`udp-relay-mode: ${node['udp-relay-mode']}`);
         if (node['congestion-controller']) props.push(`congestion-controller: ${node['congestion-controller']}`);
     }
 
-    // 缩进处理 (所有属性增加 2 个空格)
     return props.map(line => '  ' + line).join('\n');
 }
 
-// --- 核心：生成标准的 节点链接 (V2RayN/Nekobox) ---
-const generateNodeLink = (node) => {
-    try {
-        const safe = (s) => encodeURIComponent(s || '');
-        // VMess (JSON)
-        if (node.type === 'vmess') {
-            const vmessObj = {
-                v: "2", ps: node.name, add: node.server, port: node.port, id: node.uuid,
-                aid: 0, scy: "auto", net: node.network || "tcp", type: "none", host: "", path: "", tls: node.tls ? "tls" : ""
+// --- 核心：输入解析 (恢复 YAML 解析能力) ---
+
+// 1. 解析 YAML 格式 (恢复此函数以解决机场节点为 0 的问题)
+const parseYamlProxies = (content) => {
+    const nodes = [];
+    if (!content) return nodes;
+    const lines = content.split(/\r?\n/);
+    let inProxyBlock = false;
+    
+    // 简单的 YAML 行解析
+    const parseLineObj = (line) => {
+        const getVal = (k) => {
+            const reg = new RegExp(`${k}:\\s*(?:['"](.*?)['"]|(.*?))(?:$|,|\\}|\\n)`, 'i');
+            const m = line.match(reg);
+            return m ? (m[1] || m[2]).trim() : undefined;
+        };
+        let type = getVal('type');
+        let server = getVal('server');
+        let port = getVal('port');
+        let name = getVal('name');
+        
+        if (!type && line.includes('ss')) type = 'ss';
+        if (!type && line.includes('vmess')) type = 'vmess';
+        
+        if (type && server && port) {
+             const node = {
+                name: name || `${type}-${server}`,
+                type, server, port,
+                cipher: getVal('cipher'), uuid: getVal('uuid'), password: getVal('password'),
+                tls: line.includes('tls: true') || getVal('tls') === 'true',
+                "skip-cert-verify": line.includes('skip-cert-verify: true'),
+                servername: getVal('servername') || getVal('sni'),
+                sni: getVal('sni'),
+                network: getVal('network'),
+                "ws-opts": undefined
             };
-            if (node["ws-opts"]) {
-                vmessObj.net = "ws";
-                vmessObj.path = node["ws-opts"].path;
-                if (node["ws-opts"].headers) vmessObj.host = node["ws-opts"].headers.Host;
+            if (node.network === 'ws') {
+                node["ws-opts"] = { path: getVal('path')||'/', headers: { Host: getVal('host')||'' } };
             }
-            if (node.flow) vmessObj.flow = node.flow; // Vision
-            return 'vmess://' + safeBase64Encode(JSON.stringify(vmessObj));
+            // 补全链接用于去重
+            node.link = `${type}://${node.server}:${node.port}#${encodeURIComponent(node.name)}`;
+            nodes.push(node);
         }
-        // VLESS / Trojan / Hysteria2 / Tuic
-        if (['vless', 'trojan', 'hysteria2', 'tuic'].includes(node.type)) {
-            let auth = node.uuid || node.password || '';
-            let link = `${node.type}://${auth}@${node.server}:${node.port}?`;
-            let params = [];
-            
-            if (node.type !== 'hysteria2' && node.type !== 'tuic') {
-               params.push(`encryption=none`); // vless/trojan standard
-            }
-            
-            if (node.tls) params.push(`security=tls`);
-            else if (node.type === 'vless' && !node.tls) params.push(`security=none`); // vless tcp
-            
-            if (node.type === 'trojan' && node.sni) params.push(`sni=${safe(node.sni)}`);
-            if (node.type === 'vless' || node.type === 'trojan') params.push(`type=${node.network || 'tcp'}`);
+    }
 
-            // Common params
-            if (node.servername) params.push(`sni=${safe(node.servername)}`);
-            if (node.flow) params.push(`flow=${node.flow}`);
-            if (node['client-fingerprint']) params.push(`fp=${node['client-fingerprint']}`);
-            if (node['skip-cert-verify']) params.push(`allowInsecure=1`); // Standard param name
-
-            // WS
-            if (node.network === 'ws' && node['ws-opts']) {
-                if (node['ws-opts'].path) params.push(`path=${safe(node['ws-opts'].path)}`);
-                if (node['ws-opts'].headers?.Host) params.push(`host=${safe(node['ws-opts'].headers.Host)}`);
-            }
-
-            // Reality
-            if (node.reality) {
-                params.push(`security=reality`);
-                params.push(`pbk=${safe(node.reality.publicKey)}`);
-                params.push(`sid=${safe(node.reality.shortId)}`);
-            }
-
-            // Hysteria2
-            if (node.type === 'hysteria2') {
-                if (node.sni) params.push(`sni=${safe(node.sni)}`);
-                if (node.obfs) {
-                    params.push(`obfs=${node.obfs}`);
-                    params.push(`obfs-password=${safe(node['obfs-password'])}`);
-                }
-            }
-
-            // Tuic
-            if (node.type === 'tuic') {
-                if (node.sni) params.push(`sni=${safe(node.sni)}`);
-                if (node['congestion-controller']) params.push(`congestion_control=${node['congestion-controller']}`);
-                if (node['udp-relay-mode']) params.push(`udp_relay_mode=${node['udp-relay-mode']}`);
-                if (node.alpn) params.push(`alpn=${safe(node.alpn[0])}`);
-            }
-
-            link += params.join('&');
-            link += `#${safe(node.name)}`;
-            return link;
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        if (/^(proxies|Proxy):/i.test(line)) { inProxyBlock = true; continue; }
+        if (/^(proxy-groups|rules|rule-providers):/i.test(line)) { inProxyBlock = false; break; }
+        if (inProxyBlock && line.startsWith('-')) {
+             // 简单处理行内对象或紧凑对象
+             if (line.includes('name:') && line.includes('server:')) {
+                 parseLineObj(line);
+             } else {
+                 // 尝试简单的多行合并
+                 let temp = line;
+                 let j = 1;
+                 while (i + j < lines.length && !lines[i+j].trim().startsWith('-')) { temp += " " + lines[i+j].trim(); j++; }
+                 parseLineObj(temp);
+             }
         }
-        // SS
-        if (node.type === 'ss') {
-            let authStr = `${node.cipher}:${node.password}`;
-            return `ss://${safeBase64Encode(authStr)}@${node.server}:${node.port}#${safe(node.name)}`;
-        }
-        return node.link;
-    } catch (e) { return ''; }
+    }
+    return nodes;
 }
 
-// --- 核心：解析节点 ---
+// 2. 通用解析器 (整合 YAML 和 链接)
 const parseNodesCommon = (text) => {
     let nodes = [];
     let decoded = deepBase64Decode(text);
     
-    // 强制每种协议换行
+    // 优先尝试 YAML (Clash)
+    if (decoded.includes('proxies:') || decoded.includes('Proxy:') || decoded.includes('- name:')) {
+        const yamlNodes = parseYamlProxies(decoded);
+        if (yamlNodes.length > 0) return yamlNodes;
+    }
+
+    // 其次尝试通用链接
     const splitText = decoded.replace(/(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//gi, '\n$1://');
     const lines = splitText.split(/\r?\n/);
     
@@ -258,23 +249,21 @@ const parseNodesCommon = (text) => {
                 // Auth
                 if (url.username) {
                     if (protocol === 'ss') {
-                        // SS special case base64
                         try {
                             const decodedAuth = safeBase64Decode(url.username);
                             if (decodedAuth.includes(':')) {
                                 const [m, p] = decodedAuth.split(':');
                                 node.cipher = m; node.password = p;
                             } else {
-                                node.cipher = url.username; node.password = url.password; // Plain
+                                node.cipher = url.username; node.password = url.password;
                             }
                         } catch(e) { node.cipher = url.username; node.password = url.password; }
                     } else {
-                        node.uuid = url.username; // VLESS/TUIC
-                        node.password = url.password || url.username; // Trojan/Hy2
+                        node.uuid = url.username;
+                        node.password = url.password || url.username;
                     }
                 }
 
-                // Standard Query Params
                 node.tls = params.get('security') === 'tls' || params.get('encryption') === 'ssl' || protocol === 'hysteria2' || protocol === 'tuic';
                 node.network = params.get('type') || 'tcp';
                 node.sni = params.get('sni');
@@ -284,7 +273,6 @@ const parseNodesCommon = (text) => {
                 node['client-fingerprint'] = params.get('fp');
                 if (params.get('alpn')) node.alpn = [params.get('alpn')];
 
-                // WS
                 if (node.network === 'ws') {
                     node['ws-opts'] = {
                         path: params.get('path') || '/',
@@ -294,12 +282,11 @@ const parseNodesCommon = (text) => {
 
                 // Reality
                 if (params.get('security') === 'reality') {
-                    node.tls = true; // Reality implies TLS logic in Clash
+                    node.tls = true; 
                     node.reality = {
                         publicKey: params.get('pbk'),
                         shortId: params.get('sid')
                     };
-                    // Ensure fingerprint is set for Reality
                     if (!node['client-fingerprint']) node['client-fingerprint'] = 'chrome'; 
                 }
                 
@@ -307,7 +294,6 @@ const parseNodesCommon = (text) => {
                 if (node.type === 'hysteria2') {
                     node.obfs = params.get('obfs');
                     node['obfs-password'] = params.get('obfs-password');
-                    // Hy2 usually implies udp: true
                     node.udp = true; 
                 }
 
@@ -318,7 +304,7 @@ const parseNodesCommon = (text) => {
                     node.udp = true;
                 }
                 
-                // Special fixes based on standard yaml
+                // Special fixes
                 if (node.type === 'vless' && node.network === 'ws') node.udp = true;
                 if (node.type === 'trojan' && node.network === 'ws') node.udp = true;
 
@@ -329,6 +315,79 @@ const parseNodesCommon = (text) => {
     return nodes;
 }
 
+// 3. 生成节点链接 (为了 V2RayN)
+const generateNodeLink = (node) => {
+    try {
+        const safe = (s) => encodeURIComponent(s || '');
+        if (node.type === 'vmess') {
+            const vmessObj = {
+                v: "2", ps: node.name, add: node.server, port: node.port, id: node.uuid,
+                aid: 0, scy: node.cipher||"auto", net: node.network || "tcp", type: "none", host: "", path: "", tls: node.tls ? "tls" : ""
+            };
+            if (node["ws-opts"]) {
+                vmessObj.net = "ws";
+                vmessObj.path = node["ws-opts"].path;
+                if (node["ws-opts"].headers) vmessObj.host = node["ws-opts"].headers.Host;
+            }
+            if (node.flow) vmessObj.flow = node.flow;
+            return 'vmess://' + safeBase64Encode(JSON.stringify(vmessObj));
+        }
+
+        if (['vless', 'trojan', 'hysteria2', 'tuic'].includes(node.type)) {
+            let auth = node.uuid || node.password || '';
+            let link = `${node.type}://${auth}@${node.server}:${node.port}?`;
+            let params = [];
+            
+            if (node.type !== 'hysteria2' && node.type !== 'tuic') params.push(`encryption=none`);
+            if (node.tls) params.push(`security=tls`);
+            else if (node.type === 'vless') params.push(`security=none`);
+            
+            if (node.type === 'trojan' && node.sni) params.push(`sni=${safe(node.sni)}`);
+            if (node.type === 'vless' || node.type === 'trojan') params.push(`type=${node.network || 'tcp'}`);
+
+            if (node.servername) params.push(`sni=${safe(node.servername)}`);
+            if (node.flow) params.push(`flow=${node.flow}`);
+            if (node['client-fingerprint']) params.push(`fp=${node['client-fingerprint']}`);
+            if (node['skip-cert-verify']) params.push(`allowInsecure=1`);
+
+            if (node.network === 'ws' && node['ws-opts']) {
+                if (node['ws-opts'].path) params.push(`path=${safe(node['ws-opts'].path)}`);
+                if (node['ws-opts'].headers?.Host) params.push(`host=${safe(node['ws-opts'].headers.Host)}`);
+            }
+            
+            // Reality
+            if (node.reality) {
+                params.push(`security=reality`);
+                params.push(`pbk=${safe(node.reality.publicKey)}`);
+                params.push(`sid=${safe(node.reality.shortId)}`);
+            }
+
+            if (node.type === 'hysteria2') {
+                if (node.sni) params.push(`sni=${safe(node.sni)}`);
+                if (node.obfs) {
+                    params.push(`obfs=${node.obfs}`);
+                    params.push(`obfs-password=${safe(node['obfs-password'])}`);
+                }
+            }
+
+            if (node.type === 'tuic') {
+                if (node.sni) params.push(`sni=${safe(node.sni)}`);
+                if (node['congestion-controller']) params.push(`congestion_control=${node['congestion-controller']}`);
+                if (node['udp-relay-mode']) params.push(`udp_relay_mode=${node['udp-relay-mode']}`);
+                if (node.alpn) params.push(`alpn=${safe(node.alpn[0])}`);
+            }
+
+            link += params.join('&');
+            link += `#${safe(node.name)}`;
+            return link;
+        }
+
+        if (node.type === 'ss') {
+            return `ss://${safeBase64Encode(`${node.cipher}:${node.password}`)}@${node.server}:${node.port}#${safe(node.name)}`;
+        }
+        return node.link || '';
+    } catch (e) { return ''; }
+}
 
 // --- 路由 ---
 
@@ -384,16 +443,12 @@ rules:
             let content = "";
             if (sub.type === 'node') content = sub.url;
             else {
-                // Fetch logic inline to simplify
                 try {
-                    const ua = 'ClashMeta/1.0';
-                    const res = await fetch(sub.url, { headers: { 'User-Agent': ua } });
+                    const res = await fetch(sub.url, { headers: { 'User-Agent': 'ClashMeta/1.0' } });
                     if(res.ok) content = await res.text();
                 } catch(e){}
             }
             const nodes = parseNodesCommon(content);
-            
-            // Name handling
             let params = {}; try { params = sub.params ? JSON.parse(sub.params) : {} } catch(e) {}
             const allowed = params.include?.length ? new Set(params.include) : null;
 
@@ -411,7 +466,6 @@ rules:
             allNodes.push({name: "无可用节点", type: "ss", server: "127.0.0.1", port: 1080, cipher: "aes-128-gcm", password: "error"});
         }
 
-        // Generate YAML Block
         const proxiesStr = allNodes.map(node => `  - ${fmtClashProxy(node).trim()}`).join('\n');
         const groupsStr = allNodes.map(node => `      - ${node.name}`).join('\n');
         
@@ -429,11 +483,10 @@ rules:
 
 // B. Base64
 app.get('/subscribe/base64', async (c) => {
-    // Re-implement simplified getAllNodes logic inline to avoid dep issues
     try {
         const token = c.req.query('token')
         if (token !== c.env.ADMIN_PASSWORD) return c.text('Unauthorized', 401)
-        const { results: subs } = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1").all()
+        const { results: subs } = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1 ORDER BY sort_order ASC, id DESC").all()
         let links = [];
         for (const sub of subs) {
              let content = "";
@@ -446,7 +499,6 @@ app.get('/subscribe/base64', async (c) => {
             
             for (const node of nodes) {
                 if (allowed && !allowed.has(node.name)) continue;
-                // Re-generate standard link
                 links.push(generateNodeLink(node));
             }
         }
@@ -454,32 +506,45 @@ app.get('/subscribe/base64', async (c) => {
     } catch(e) { return c.text(e.message, 500) }
 })
 
-// CRUD / Check / Login (保留原始简单逻辑，或按需更新)
+// C. Check / Login (修复：区分节点和订阅)
 app.post('/check', async (c) => {
-    const { url } = await c.req.json();
+    const { url, type } = await c.req.json();
     try {
-        const res = await fetch(url, { headers: { 'User-Agent': 'ClashMeta/1.0' } });
-        if(!res.ok) throw new Error(res.status);
-        const text = await res.text();
-        const nodes = parseNodesCommon(text);
-        
-        // Mock stats
+        let content = "";
         let stats = null;
-        const info = res.headers.get('subscription-userinfo');
-        if(info) {
-             const parts = {}; info.split(';').forEach(p => { const [k,v]=p.split('='); if(k&&v) parts[k.trim()]=Number(v) });
-             if(parts.total) stats = { total: formatBytes(parts.total), used: formatBytes((parts.upload||0)+(parts.download||0)), expire: parts.expire ? new Date(parts.expire*1000).toLocaleDateString() : '长期' };
+
+        if (type === 'node') {
+            // 如果是自建节点，直接解析内容，不要 fetch！
+            content = url; 
+        } else {
+            // 如果是订阅，才去 fetch
+            const res = await fetch(url, { headers: { 'User-Agent': 'ClashMeta/1.0' } });
+            if(!res.ok) throw new Error(`HTTP ${res.status}`);
+            content = await res.text();
+            
+            const info = res.headers.get('subscription-userinfo');
+            if(info) {
+                 const parts = {}; info.split(';').forEach(p => { const [k,v]=p.split('='); if(k&&v) parts[k.trim()]=Number(v) });
+                 if(parts.total) stats = { total: formatBytes(parts.total), used: formatBytes((parts.upload||0)+(parts.download||0)), expire: parts.expire ? new Date(parts.expire*1000).toLocaleDateString() : '长期' };
+            }
         }
+
+        const nodes = parseNodesCommon(content);
         return c.json({ success: true, data: { valid: true, nodeCount: nodes.length, stats } });
     } catch(e) { return c.json({ success: false, error: e.message }) }
 })
 
-// Standard CRUD
-app.get('/subs', async (c) => { const {results} = await c.env.DB.prepare("SELECT * FROM subscriptions").all(); return c.json({success:true, data:results}) })
+// CRUD
+app.get('/subs', async (c) => { const {results} = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all(); return c.json({success:true, data:results}) })
 app.post('/subs', async (c) => { const b=await c.req.json(); await c.env.DB.prepare("INSERT INTO subscriptions (name,url,type,params,info,sort_order,status) VALUES (?,?,?,?,?,0,1)").bind(b.name,b.url,b.type||'sub',JSON.stringify(b.params||{}),'{}').run(); return c.json({success:true}) })
 app.put('/subs/:id', async (c) => { const b=await c.req.json(); await c.env.DB.prepare("UPDATE subscriptions SET name=?, url=?, params=? WHERE id=?").bind(b.name,b.url,JSON.stringify(b.params||{}), c.req.param('id')).run(); return c.json({success:true}) })
 app.delete('/subs/:id', async (c) => { await c.env.DB.prepare("DELETE FROM subscriptions WHERE id=?").bind(c.req.param('id')).run(); return c.json({success:true}) })
+app.post('/sort', async (c) => { const {ids}=await c.req.json(); const s=c.env.DB.prepare("UPDATE subscriptions SET sort_order=? WHERE id=?"); await c.env.DB.batch(ids.map((id,i)=>s.bind(i,id))); return c.json({success:true}) })
+app.post('/backup/import', async (c) => { const {items}=await c.req.json(); const s=c.env.DB.prepare("INSERT INTO subscriptions (name, url, type, info, params, status, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)"); await c.env.DB.batch(items.map(i=>s.bind(i.name,i.url,i.type||'subscription',JSON.stringify(i.info),JSON.stringify(i.params),i.status??1,i.sort_order??0))); return c.json({success:true}) })
+app.get('/settings', async(c)=>{return c.json({success:true,data:{}})}) 
+app.post('/settings', async(c)=>{return c.json({success:true})})
 app.post('/login', async (c) => { const {password}=await c.req.json(); return c.json({success: password===c.env.ADMIN_PASSWORD}) })
-app.get('/template/default', async (c) => { return c.json({success:true, data: ""}) }) // Placeholder
+app.get('/template/default', async (c) => { const {results}=await c.env.DB.prepare("SELECT content FROM templates WHERE is_default=1").all(); return c.json({success:true, data: results[0]?.content||""}) })
+app.post('/template/default', async (c) => { const {content}=await c.req.json(); await c.env.DB.prepare("UPDATE templates SET content=? WHERE is_default=1").bind(content).run(); return c.json({success:true}) })
 
 export const onRequest = handle(app)

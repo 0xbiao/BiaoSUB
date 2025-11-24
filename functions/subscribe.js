@@ -3,7 +3,7 @@ import { handle } from 'hono/cloudflare-pages'
 
 const app = new Hono()
 
-// --- 工具 (保持与 API 一致) ---
+// --- 工具函数 ---
 const safeBase64Encode = (str) => { try { return btoa(unescape(encodeURIComponent(str))); } catch (e) { return btoa(str); } }
 const safeBase64Decode = (str) => {
     if (!str) return '';
@@ -28,12 +28,12 @@ const deepBase64Decode = (str, depth = 0) => {
     } catch (e) { return str; }
 }
 
-// --- 生成链接 (严格按照标准) ---
+// --- 解析与生成 ---
+
+// 生成标准节点链接
 const generateNodeLink = (node) => {
     try {
         const safe = (s) => encodeURIComponent(s || '');
-        
-        // VMess
         if (node.type === 'vmess') {
             const vmessObj = {
                 v: "2", ps: node.name, add: node.server, port: node.port, id: node.uuid,
@@ -47,15 +47,13 @@ const generateNodeLink = (node) => {
             if (node.flow) vmessObj.flow = node.flow;
             return 'vmess://' + safeBase64Encode(JSON.stringify(vmessObj));
         }
-
-        // VLESS / Trojan / Hy2 / Tuic
+        
         if (['vless', 'trojan', 'hysteria2', 'tuic'].includes(node.type)) {
             let auth = node.uuid || node.password || '';
             let link = `${node.type}://${auth}@${node.server}:${node.port}?`;
             let params = [];
             
             if (node.type !== 'hysteria2' && node.type !== 'tuic') params.push(`encryption=none`);
-            
             if (node.tls) params.push(`security=tls`);
             else if (node.type === 'vless') params.push(`security=none`);
             
@@ -98,7 +96,6 @@ const generateNodeLink = (node) => {
             return link;
         }
 
-        // SS
         if (node.type === 'ss') {
             return `ss://${safeBase64Encode(`${node.cipher}:${node.password}`)}@${node.server}:${node.port}#${safe(node.name)}`;
         }
@@ -106,18 +103,84 @@ const generateNodeLink = (node) => {
     } catch (e) { return ''; }
 }
 
-// --- 解析 (复制自 API) ---
+// 解析器 (同步 API 逻辑)
+const parseYamlProxies = (content) => {
+    const nodes = [];
+    if (!content) return nodes;
+    const lines = content.split(/\r?\n/);
+    let inProxyBlock = false;
+    
+    const parseLineObj = (line) => {
+        const getVal = (k) => {
+            const reg = new RegExp(`${k}:\\s*(?:['"](.*?)['"]|(.*?))(?:$|,|\\}|\\n)`, 'i');
+            const m = line.match(reg);
+            return m ? (m[1] || m[2]).trim() : undefined;
+        };
+        let type = getVal('type');
+        let server = getVal('server');
+        let port = getVal('port');
+        let name = getVal('name');
+        
+        if (!type && line.includes('ss')) type = 'ss';
+        if (!type && line.includes('vmess')) type = 'vmess';
+        
+        if (type && server && port) {
+             const node = {
+                name: name || `${type}-${server}`,
+                type, server, port,
+                cipher: getVal('cipher'), uuid: getVal('uuid'), password: getVal('password'),
+                tls: line.includes('tls: true') || getVal('tls') === 'true',
+                "skip-cert-verify": line.includes('skip-cert-verify: true'),
+                servername: getVal('servername') || getVal('sni'),
+                sni: getVal('sni'),
+                network: getVal('network'),
+                "ws-opts": undefined
+            };
+            if (node.network === 'ws') {
+                node["ws-opts"] = { path: getVal('path')||'/', headers: { Host: getVal('host')||'' } };
+            }
+            node.link = `${type}://${node.server}:${node.port}#${encodeURIComponent(node.name)}`;
+            nodes.push(node);
+        }
+    }
+
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        if (/^(proxies|Proxy):/i.test(line)) { inProxyBlock = true; continue; }
+        if (/^(proxy-groups|rules|rule-providers):/i.test(line)) { inProxyBlock = false; break; }
+        if (inProxyBlock && line.startsWith('-')) {
+             if (line.includes('name:') && line.includes('server:')) {
+                 parseLineObj(line);
+             } else {
+                 let temp = line;
+                 let j = 1;
+                 while (i + j < lines.length && !lines[i+j].trim().startsWith('-')) { temp += " " + lines[i+j].trim(); j++; }
+                 parseLineObj(temp);
+             }
+        }
+    }
+    return nodes;
+}
+
 const parseNodesCommon = (text) => {
     let nodes = [];
     let decoded = deepBase64Decode(text);
+    
+    if (decoded.includes('proxies:') || decoded.includes('Proxy:') || decoded.includes('- name:')) {
+        const yamlNodes = parseYamlProxies(decoded);
+        if (yamlNodes.length > 0) return yamlNodes;
+    }
+
     const splitText = decoded.replace(/(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//gi, '\n$1://');
     const lines = splitText.split(/\r?\n/);
     
     for (const line of lines) {
         const trimLine = line.trim();
         if (!trimLine || trimLine.length < 10) continue;
+        
         try {
-             if (trimLine.startsWith('vmess://')) {
+            if (trimLine.startsWith('vmess://')) {
                 const c = JSON.parse(safeBase64Decode(trimLine.substring(8)));
                 nodes.push({ name: c.ps, type: 'vmess', server: c.add, port: c.port, uuid: c.id, cipher: c.scy||'auto', network: c.net, tls: c.tls==='tls', "ws-opts": c.net==='ws' ? { path: c.path, headers: { Host: c.host } } : undefined, flow: c.flow, link: trimLine });
                 continue;
@@ -156,11 +219,12 @@ const parseNodesCommon = (text) => {
     return nodes;
 }
 
-// --- 主入口 ---
+// --- 入口 ---
+
 app.get('/', async (c) => {
     try {
         if (!c.env.DB) return c.text('DB Error', 500)
-        const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1").all()
+        const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1 ORDER BY sort_order ASC, id DESC").all()
         let allLinks = []
 
         for (const sub of results) {

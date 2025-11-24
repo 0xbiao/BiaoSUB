@@ -36,17 +36,63 @@ const deepBase64Decode = (str, depth = 0) => {
     try {
         const clean = str.replace(/\s/g, '');
         if (!/^[A-Za-z0-9+/=_:-]+$/.test(clean) || clean.length < 10) return str;
-        if (clean.includes('proxies:') || clean.includes('mixed-port:')) return str;
+        if (clean.includes('proxies:') || clean.includes('mixed-port:') || clean.includes('proxy-groups:')) return str;
         let safeStr = clean.replace(/-/g, '+').replace(/_/g, '/');
         while (safeStr.length % 4) safeStr += '=';
         const decoded = new TextDecoder('utf-8').decode(Uint8Array.from(atob(safeStr), c => c.charCodeAt(0)));
-        if (decoded.includes('://') || decoded.includes('proxies:')) return deepBase64Decode(decoded, depth + 1);
+        if (decoded.includes('://') || decoded.includes('proxies:') || decoded.includes('server:')) return deepBase64Decode(decoded, depth + 1);
         return decoded;
     } catch (e) { return str; }
 }
 const safeStr = (str) => JSON.stringify(String(str || ''))
 
-// --- 核心：Clash 节点生成 (修复缩进) ---
+// --- 核心：智能 Fetch (恢复) ---
+const extractUserInfo = (headers) => {
+    let infoStr = null;
+    headers.forEach((val, key) => { if (key.toLowerCase().includes('userinfo')) infoStr = val; });
+    if (!infoStr) return null;
+    const info = {};
+    infoStr.split(';').forEach(part => { const [key, value] = part.trim().split('='); if (key && value) info[key.trim().toLowerCase()] = Number(value); });
+    if (!info.total && !info.upload && !info.download) return null;
+    return {
+        used: formatBytes((info.upload || 0) + (info.download || 0)),
+        total: info.total ? formatBytes(info.total) : '无限制',
+        expire: info.expire ? new Date(info.expire * 1000).toLocaleDateString() : '长期',
+        percent: info.total ? Math.min(100, Math.round(((info.upload || 0) + (info.download || 0)) / info.total * 100)) : 0,
+        raw_total: info.total, raw_used: (info.upload || 0) + (info.download || 0), raw_expire: info.expire
+    };
+}
+
+const fetchWithSmartUA = async (url) => {
+  const userAgents = ['ClashMeta/1.0', 'v2rayNG/1.8.5', 'Clash/1.0', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'];
+  let bestRes = null;
+  for (const ua of userAgents) {
+    try {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 10000);
+      const res = await fetch(url, { headers: { 'User-Agent': ua }, signal: controller.signal });
+      clearTimeout(id);
+      if (res.ok) {
+        const clone = res.clone();
+        const text = await clone.text();
+        if (text.includes('<!DOCTYPE html>') || text.includes('<html')) continue;
+        const info = extractUserInfo(res.headers);
+        if (info) {
+            Object.defineProperty(res, 'trafficInfo', { value: info, writable: true });
+            Object.defineProperty(res, 'prefetchedText', { value: text, writable: true });
+            return res;
+        }
+        if (!bestRes) {
+            bestRes = res;
+            Object.defineProperty(bestRes, 'prefetchedText', { value: text, writable: true });
+        }
+      }
+    } catch (e) {}
+  }
+  return bestRes;
+}
+
+// --- 核心：Clash 节点生成 (严格匹配标准) ---
 const fmtClashProxy = (node) => {
     let lines = [];
     lines.push(`  - name: ${safeStr(node.name)}`);
@@ -59,10 +105,12 @@ const fmtClashProxy = (node) => {
     if (node.cipher) lines.push(`    cipher: ${node.cipher}`);
     if (node.udp) lines.push(`    udp: true`);
     if (node["skip-cert-verify"]) lines.push(`    skip-cert-verify: true`);
+    if (node.tfo) lines.push(`    tfo: true`);
     
     if (node.tls) {
         lines.push(`    tls: true`);
         if (node.servername) lines.push(`    servername: ${safeStr(node.servername)}`);
+        if (node.alpn && node.alpn.length > 0) lines.push(`    alpn: [${node.alpn.map(a => `"${a}"`).join(', ')}]`);
         if (node["client-fingerprint"]) lines.push(`    client-fingerprint: ${node["client-fingerprint"]}`);
     }
 
@@ -70,7 +118,7 @@ const fmtClashProxy = (node) => {
         lines.push(`    flow: ${node.flow || 'xtls-rprx-vision'}`);
         lines.push(`    reality-opts:`);
         lines.push(`      public-key: ${safeStr(node.reality.publicKey)}`);
-        lines.push(`      short-id: ${safeStr(node.reality.shortId)}`);
+        if (node.reality.shortId) lines.push(`      short-id: ${safeStr(node.reality.shortId)}`);
     } else if (node.flow) {
         lines.push(`    flow: ${node.flow}`);
     }
@@ -85,6 +133,10 @@ const fmtClashProxy = (node) => {
                 lines.push(`        Host: ${safeStr(node['ws-opts'].headers.Host)}`);
             }
         }
+        if (node.network === 'grpc' && node['grpc-opts']) {
+            lines.push(`    grpc-opts:`);
+            lines.push(`      grpc-service-name: ${safeStr(node['grpc-opts']['grpc-service-name'])}`);
+        }
     }
 
     if (node.type === 'trojan' && node.sni) lines.push(`    sni: ${safeStr(node.sni)}`);
@@ -97,7 +149,6 @@ const fmtClashProxy = (node) => {
     }
     if (node.type === 'tuic') {
         if (node.sni) lines.push(`    sni: ${safeStr(node.sni)}`);
-        if (node.alpn) lines.push(`    alpn: [${node.alpn.map(a=>`"${a}"`).join(', ')}]`);
         lines.push(`    udp-relay-mode: native`);
         lines.push(`    congestion-controller: bbr`);
     }
@@ -105,7 +156,7 @@ const fmtClashProxy = (node) => {
     return lines.join('\n');
 }
 
-// --- 核心：生成标准链接 ---
+// --- 核心：解析器 (增强版) ---
 const generateNodeLink = (node) => {
     try {
         const safe = (s) => encodeURIComponent(s || '');
@@ -129,14 +180,12 @@ const generateNodeLink = (node) => {
             if (node.type !== 'hysteria2' && node.type !== 'tuic') params.push(`encryption=none`);
             if (node.tls) params.push(`security=tls`);
             else if (node.type === 'vless') params.push(`security=none`);
-            
             if (node.type === 'trojan' && node.sni) params.push(`sni=${safe(node.sni)}`);
             if (node.type === 'vless' || node.type === 'trojan') params.push(`type=${node.network || 'tcp'}`);
             if (node.servername) params.push(`sni=${safe(node.servername)}`);
             if (node.flow) params.push(`flow=${node.flow}`);
             if (node['client-fingerprint']) params.push(`fp=${node['client-fingerprint']}`);
             if (node['skip-cert-verify']) params.push(`allowInsecure=1`);
-            
             if (node.network === 'ws' && node['ws-opts']) {
                 if (node['ws-opts'].path) params.push(`path=${safe(node['ws-opts'].path)}`);
                 if (node['ws-opts'].headers?.Host) params.push(`host=${safe(node['ws-opts'].headers.Host)}`);
@@ -170,47 +219,84 @@ const generateNodeLink = (node) => {
     } catch (e) { return ''; }
 }
 
-// --- 解析器 ---
+const parseYamlProxies = (content) => {
+    const nodes = [];
+    if (!content) return nodes;
+    const lines = content.split(/\r?\n/);
+    let inProxyBlock = false;
+    const parseLineObj = (line) => {
+        const getVal = (k) => {
+            const reg = new RegExp(`${k}:\\s*(?:['"](.*?)['"]|(.*?))(?:$|,|\\}|\\n)`, 'i');
+            const m = line.match(reg);
+            return m ? (m[1] || m[2]).trim() : undefined;
+        };
+        let type = getVal('type');
+        let server = getVal('server');
+        let port = getVal('port');
+        let name = getVal('name');
+        if (!type && line.includes('ss')) type = 'ss';
+        if (!type && line.includes('vmess')) type = 'vmess';
+        if (type && server && port) {
+             const node = {
+                name: name || `${type}-${server}`,
+                type, server, port,
+                cipher: getVal('cipher'), uuid: getVal('uuid'), password: getVal('password'),
+                tls: line.includes('tls: true') || getVal('tls') === 'true',
+                "skip-cert-verify": line.includes('skip-cert-verify: true'),
+                servername: getVal('servername') || getVal('sni'),
+                sni: getVal('sni'),
+                network: getVal('network'),
+                "ws-opts": undefined
+            };
+            if (node.network === 'ws') {
+                node["ws-opts"] = { path: getVal('path')||'/', headers: { Host: getVal('host')||'' } };
+            }
+            node.link = generateNodeLink(node);
+            nodes.push(node);
+        }
+    }
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+        if (/^(proxies|Proxy):/i.test(line)) { inProxyBlock = true; continue; }
+        if (/^(proxy-groups|rules|rule-providers):/i.test(line)) { inProxyBlock = false; break; }
+        if (inProxyBlock && line.startsWith('-')) {
+             if (line.includes('name:') && line.includes('server:')) { parseLineObj(line); } 
+             else {
+                 let temp = line;
+                 let j = 1;
+                 while (i + j < lines.length && !lines[i+j].trim().startsWith('-')) { temp += " " + lines[i+j].trim(); j++; }
+                 parseLineObj(temp);
+             }
+        }
+    }
+    return nodes;
+}
+
 const parseNodesCommon = (text) => {
     let nodes = [];
     let decoded = deepBase64Decode(text);
     
-    const yamlMatch = decoded.match(/proxies:\s*([\s\S]*?)(?:proxy-groups:|rules:|$)/);
-    if (yamlMatch) {
-        const block = yamlMatch[1];
-        const lines = block.split(/\r?\n/);
-        let current = null;
-        for (const line of lines) {
-            if (line.trim().startsWith('- name:')) {
-                if (current) nodes.push(current);
-                current = {};
-            }
-            if (!current) continue;
-            const parts = line.trim().replace(/^- /, '').split(':');
-            if (parts.length >= 2) {
-                const key = parts[0].trim();
-                let val = parts.slice(1).join(':').trim().replace(/^['"]|['"]$/g, '');
-                if (key === 'name' || key === 'server' || key === 'type' || key === 'uuid' || key === 'password' || key === 'cipher' || key === 'sni') {
-                    current[key] = val;
-                }
-                if (key === 'port') current.port = parseInt(val);
-                if (key === 'udp') current.udp = val === 'true';
-                if (key === 'tls') current.tls = val === 'true';
-            }
-        }
-        if (current) nodes.push(current);
+    // 1. YAML 检测
+    if (decoded.includes('proxies:') || decoded.includes('Proxy:') || decoded.includes('- name:')) {
+        const yamlNodes = parseYamlProxies(decoded);
+        if (yamlNodes.length > 0) return yamlNodes;
     }
 
-    const lines = decoded.split(/[\r\n]+/);
+    // 2. 通用链接处理
+    const splitText = decoded.replace(/(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//gi, '\n$1://');
+    const lines = splitText.split(/[\r\n]+/);
+    
     for (const line of lines) {
         const trimLine = line.trim();
-        if (!trimLine) continue;
+        if (!trimLine || trimLine.length < 10) continue;
         try {
             if (trimLine.startsWith('vmess://')) {
                 const c = JSON.parse(safeBase64Decode(trimLine.substring(8)));
-                nodes.push({ name: c.ps, type: 'vmess', server: c.add, port: c.port, uuid: c.id, cipher: c.scy||'auto', network: c.net, tls: c.tls==='tls', "ws-opts": c.net==='ws' ? { path: c.path, headers: { Host: c.host } } : undefined, flow: c.flow });
-            } 
-            else if (/^(vless|ss|trojan|hysteria2?|tuic):\/\//i.test(trimLine)) {
+                nodes.push({ name: c.ps, type: 'vmess', server: c.add, port: c.port, uuid: c.id, cipher: c.scy||'auto', network: c.net, tls: c.tls==='tls', "ws-opts": c.net==='ws' ? { path: c.path, headers: { Host: c.host } } : undefined, flow: c.flow, link: trimLine });
+                continue;
+            }
+            if (/^(vless|ss|trojan|hysteria2?|tuic):\/\//i.test(trimLine)) {
                 const url = new URL(trimLine);
                 const params = url.searchParams;
                 const protocol = url.protocol.replace(':', '');
@@ -224,18 +310,20 @@ const parseNodesCommon = (text) => {
                     tls: params.get('security') === 'tls' || protocol === 'hysteria2' || protocol === 'tuic',
                     network: params.get('type') || 'tcp',
                     sni: params.get('sni'),
-                    servername: params.get('sni'),
+                    servername: params.get('sni') || params.get('host'),
                     "skip-cert-verify": params.get('allowInsecure') === '1',
                     flow: params.get('flow'),
                     "client-fingerprint": params.get('fp')
                 };
                 if (protocol === 'ss') {
-                     try { const d = safeBase64Decode(url.username); if (d.includes(':')) { const [m, p] = d.split(':'); node.cipher = m; node.password = p; } else { node.cipher = url.username; node.password = url.password; } } catch(e){}
+                     try { const d = safeBase64Decode(url.username); if (d.includes(':')) { const [m, p] = d.split(':'); node.cipher = m; node.password = p; } else { node.cipher = url.username; node.password = url.password; } } catch(e) { node.cipher = url.username; node.password = url.password; }
                 }
-                if (node.network === 'ws') node['ws-opts'] = { path: params.get('path'), headers: { Host: params.get('host') } };
-                if (params.get('security') === 'reality') { node.tls = true; node.reality = { publicKey: params.get('pbk'), shortId: params.get('sid') }; }
+                if (node.network === 'ws') node['ws-opts'] = { path: params.get('path')||'/', headers: { Host: params.get('host')||node.servername } };
+                if (params.get('security') === 'reality') { node.tls = true; node.reality = { publicKey: params.get('pbk'), shortId: params.get('sid') }; if(!node['client-fingerprint']) node['client-fingerprint']='chrome'; }
                 if (protocol === 'hysteria2') { node.obfs = params.get('obfs'); node['obfs-password'] = params.get('obfs-password'); node.udp = true; }
-                if (protocol === 'tuic') { node.alpn = [params.get('alpn')||'h3']; node.udp = true; }
+                if (protocol === 'tuic') { node['congestion-controller'] = params.get('congestion_control'); node['udp-relay-mode'] = params.get('udp_relay_mode'); node.alpn = [params.get('alpn')||'h3']; node.udp = true; }
+                if ((protocol === 'vless' || protocol === 'trojan') && node.network === 'ws') node.udp = true;
+
                 nodes.push(node);
             }
         } catch(e) {}
@@ -249,32 +337,64 @@ const parseNodesCommon = (text) => {
 
 // --- 路由 ---
 
+// A. Clash 订阅 (加载全局模板)
 app.get('/subscribe/clash', async (c) => {
     try {
         const token = c.req.query('token')
         if (token !== c.env.ADMIN_PASSWORD) return c.text('Unauthorized', 401)
         
-        const { results: subs } = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1").all()
+        // 1. 获取所有启用订阅
+        const { results: subs } = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1 ORDER BY sort_order ASC, id DESC").all()
         
+        // 2. 获取全局模板
+        let template = "";
+        try {
+            const { results: tmpl } = await c.env.DB.prepare("SELECT content FROM templates WHERE is_default = 1 LIMIT 1").all()
+            if (tmpl.length > 0) template = tmpl[0].content
+        } catch(e) {}
+
+        // 默认最简模板
+        if (!template) {
+            template = `port: 7890
+socks-port: 7891
+allow-lan: true
+mode: rule
+log-level: info
+external-controller: '0.0.0.0:9090'
+proxies:
+<BIAOSUB_PROXIES>
+proxy-groups:
+  - name: 🚀 节点选择
+    type: select
+    proxies:
+      - ♻️ 自动选择
+<BIAOSUB_GROUP_ALL>
+  - name: ♻️ 自动选择
+    type: url-test
+    url: http://www.gstatic.com/generate_204
+    interval: 300
+    tolerance: 50
+    proxies:
+<BIAOSUB_GROUP_ALL>
+rules:
+  - MATCH,🚀 节点选择`;
+        }
+
         let allNodes = []
-        let customTemplate = null
-
         for (const sub of subs) {
-            let params = {}; try { params = JSON.parse(sub.params) } catch(e) {}
-            if (!customTemplate && params.template && params.template.trim().length > 10) {
-                customTemplate = params.template;
-            }
-
             let content = "";
             if (sub.type === 'node') content = sub.url;
             else {
-                try {
-                    const res = await fetch(sub.url, { headers: { 'User-Agent': 'ClashMeta/1.0' } });
-                    if(res.ok) content = await res.text();
-                } catch(e){}
+                const res = await fetchWithSmartUA(sub.url); // 使用恢复的 SmartUA
+                if(res && res.ok) content = res.prefetchedText || await res.text();
             }
+            
             const nodes = parseNodesCommon(content);
+            let params = {}; try { params = sub.params ? JSON.parse(sub.params) : {} } catch(e) {}
+            const allowed = params.include?.length ? new Set(params.include) : null;
+
             for(const node of nodes) {
+                if (allowed && !allowed.has(node.name)) continue;
                 let name = node.name.trim();
                 let i = 1;
                 while (allNodes.some(n => n.name === name)) name = `${node.name} ${i++}`;
@@ -285,29 +405,10 @@ app.get('/subscribe/clash', async (c) => {
 
         const proxiesStr = allNodes.map(node => fmtClashProxy(node)).join('\n');
         const groupsStr = allNodes.map(node => `      - ${safeStr(node.name)}`).join('\n');
-
-        let finalYaml = "";
-        if (customTemplate) {
-            finalYaml = customTemplate
-                .replace(/<PROXIES>|<BIAOSUB_PROXIES>/g, proxiesStr)
-                .replace(/<PROXY_GROUPS>|<BIAOSUB_GROUP_ALL>/g, groupsStr);
-        } else {
-            finalYaml = `port: 7890
-socks-port: 7891
-allow-lan: true
-mode: rule
-log-level: info
-external-controller: '0.0.0.0:9090'
-proxies:
-${proxiesStr}
-proxy-groups:
-  - name: 🚀 节点选择
-    type: select
-    proxies:
-${groupsStr}
-rules:
-  - MATCH,🚀 节点选择`;
-        }
+        
+        const finalYaml = template
+            .replace(/<BIAOSUB_PROXIES>/g, proxiesStr)
+            .replace(/<BIAOSUB_GROUP_ALL>/g, groupsStr);
 
         return c.text(finalYaml, 200, { 
             'Content-Type': 'text/yaml; charset=utf-8',
@@ -316,55 +417,57 @@ rules:
     } catch(e) { return c.text(e.message, 500) }
 })
 
+// B. Base64
 app.get('/subscribe/base64', async (c) => {
     try {
         const token = c.req.query('token')
         if (token !== c.env.ADMIN_PASSWORD) return c.text('Unauthorized', 401)
-        const { results: subs } = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1").all()
+        const { results: subs } = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1 ORDER BY sort_order ASC, id DESC").all()
         let links = [];
         for (const sub of subs) {
              let content = "";
             if (sub.type === 'node') content = sub.url;
-            else { try { const res = await fetch(sub.url, {headers:{'User-Agent':'v2rayNG/1.8.5'}}); if(res.ok) content = await res.text(); } catch(e){} }
+            else { const res = await fetchWithSmartUA(sub.url); if(res && res.ok) content = res.prefetchedText || await res.text(); }
             const nodes = parseNodesCommon(content);
-            for (const node of nodes) links.push(node.link);
+            let params = {}; try { params = sub.params ? JSON.parse(sub.params) : {} } catch(e) {}
+            const allowed = params.include?.length ? new Set(params.include) : null;
+            for (const node of nodes) {
+                if (allowed && !allowed.has(node.name)) continue;
+                links.push(generateNodeLink(node));
+            }
         }
         return c.text(btoa(encodeURIComponent(links.join('\n')).replace(/%([0-9A-F]{2})/g, (m, p1) => String.fromCharCode('0x' + p1))))
     } catch(e) { return c.text(e.message, 500) }
 })
 
+// C. Check 接口 (恢复：使用 fetchWithSmartUA)
 app.post('/check', async (c) => {
     const { url, type } = await c.req.json();
     try {
         let content = "";
         let stats = null;
         if (type === 'node') {
-            content = url;
+            content = url; 
         } else {
-            const res = await fetch(url, { headers: { 'User-Agent': 'ClashMeta/1.0' } });
-            if(!res.ok) throw new Error(`HTTP ${res.status}`);
-            content = await res.text();
-            const info = res.headers.get('subscription-userinfo');
-            if(info) {
-                 const parts = {}; info.split(';').forEach(p => { const [k,v]=p.split('='); if(k&&v) parts[k.trim()]=Number(v) });
-                 if(parts.total && parts.total > 0) {
-                     const used = (parts.upload||0)+(parts.download||0);
-                     stats = { 
-                         total: formatBytes(parts.total), 
-                         used: formatBytes(used), 
-                         percent: Math.round((used/parts.total)*100),
-                         expire: parts.expire ? new Date(parts.expire*1000).toLocaleDateString() : '长期' 
-                     };
-                 }
+            // 关键修复：使用 SmartUA 重试逻辑
+            const res = await fetchWithSmartUA(url);
+            if(!res || !res.ok) throw new Error(`Connect Failed`);
+            content = res.prefetchedText || await res.text();
+            
+            if(res.trafficInfo) {
+                stats = res.trafficInfo;
             }
         }
-        const nodes = parseNodesCommon(content);
+
+        const rawNodes = parseNodesCommon(content);
+        const nodes = rawNodes.map(n => ({ ...n, link: generateNodeLink(n) }));
+
         return c.json({ success: true, data: { valid: true, nodeCount: nodes.length, stats, nodes } });
     } catch(e) { return c.json({ success: false, error: e.message }) }
 })
 
 // CRUD
-app.get('/subs', async (c) => { const {results}=await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all(); return c.json({success:true, data:results.map(i=>{try{i.info=JSON.parse(i.info);i.params=JSON.parse(i.params)}catch(e){}return i})}) })
+app.get('/subs', async (c) => { const {results} = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all(); return c.json({success:true, data:results.map(i=>{try{i.info=JSON.parse(i.info);i.params=JSON.parse(i.params)}catch(e){}return i})}) })
 app.post('/subs', async (c) => { const b=await c.req.json(); await c.env.DB.prepare("INSERT INTO subscriptions (name,url,type,params,info,sort_order,status) VALUES (?,?,?,?,?,0,1)").bind(b.name,b.url,b.type||'sub',JSON.stringify(b.params||{}),'{}').run(); return c.json({success:true}) })
 app.put('/subs/:id', async (c) => { const b=await c.req.json(); let q="UPDATE subscriptions SET updated_at=CURRENT_TIMESTAMP"; const a=[]; for(const k of ['name','url','status','type'])if(b[k]!==undefined){q+=`, ${k}=?`;a.push(b[k])}; if(b.params){q+=`, params=?`;a.push(JSON.stringify(b.params))}; if(b.info){q+=`, info=?`;a.push(JSON.stringify(b.info))}; q+=" WHERE id=?"; a.push(c.req.param('id')); await c.env.DB.prepare(q).bind(...a).run(); return c.json({success:true}) })
 app.delete('/subs/:id', async (c) => { await c.env.DB.prepare("DELETE FROM subscriptions WHERE id=?").bind(c.req.param('id')).run(); return c.json({success:true}) })
@@ -373,5 +476,7 @@ app.post('/backup/import', async (c) => { const {items}=await c.req.json(); cons
 app.post('/login', async (c) => { const {password}=await c.req.json(); return c.json({success: password===c.env.ADMIN_PASSWORD}) })
 app.get('/template/default', async (c) => { const {results}=await c.env.DB.prepare("SELECT content FROM templates WHERE is_default=1").all(); return c.json({success:true, data: results[0]?.content||""}) })
 app.post('/template/default', async (c) => { const {content}=await c.req.json(); await c.env.DB.prepare("UPDATE templates SET content=? WHERE is_default=1").bind(content).run(); return c.json({success:true}) })
+app.get('/settings', async(c)=>{return c.json({success:true,data:{}})}) 
+app.post('/settings', async(c)=>{return c.json({success:true})})
 
 export const onRequest = handle(app)

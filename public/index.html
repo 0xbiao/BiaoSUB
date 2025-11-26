@@ -37,7 +37,6 @@
         <div class="navbar glass-panel rounded-2xl mb-8 shadow-xl">
             <div class="flex-1"><a class="btn btn-ghost normal-case text-2xl font-bold text-white"><i class="fa-solid fa-bolt text-yellow-400 mr-2"></i> BiaoSUB</a></div>
             <div class="flex-none gap-2">
-                <button @click="openTemplateModal" class="btn btn-circle btn-ghost tooltip tooltip-bottom" data-tip="全局模板"><i class="fa-solid fa-file-code text-xl"></i></button>
                 <button @click="openSettings" class="btn btn-circle btn-ghost tooltip tooltip-bottom" data-tip="设置"><i class="fa-solid fa-gear text-xl"></i></button>
                 <button @click="logout" class="btn btn-circle btn-ghost text-red-400 tooltip tooltip-bottom" data-tip="退出"><i class="fa-solid fa-power-off text-xl"></i></button>
             </div>
@@ -105,8 +104,7 @@
                                 <div class="text-xs text-slate-500 mt-1">包含资源: <span class="text-slate-300">{{ group.config.length }}</span> 个</div>
                             </div>
                             <div class="flex gap-2 flex-wrap">
-                                <button @click="copyGroupLink(group, 'clash')" class="btn btn-sm bg-[#1e1e1e] hover:bg-[#2d2d2d] text-slate-500 border-slate-600 cursor-not-allowed opacity-50" title="暂不可用"><i class="fa-solid fa-cat"></i> Clash</button>
-                                <button @click="copyGroupLink(group, 'base64')" class="btn btn-sm bg-[#1e1e1e] hover:bg-[#2d2d2d] text-indigo-500 border-slate-600"><i class="fa-solid fa-paper-plane"></i> V2Ray</button>
+                                <button @click="copyGroupLink(group)" class="btn btn-sm bg-[#1e1e1e] hover:bg-[#2d2d2d] text-indigo-500 border-slate-600"><i class="fa-solid fa-paper-plane"></i> V2Ray</button>
                                 <button @click="refreshToken(group)" class="btn btn-sm btn-ghost text-warning" title="刷新密钥"><i class="fa-solid fa-key"></i></button>
                                 <button @click="editGroup(group)" class="btn btn-sm btn-ghost"><i class="fa-solid fa-pen"></i></button>
                                 <button @click="deleteGroup(group.id)" class="btn btn-sm btn-ghost text-error"><i class="fa-solid fa-trash"></i></button>
@@ -217,19 +215,6 @@
             </div>
         </dialog>
 
-        <dialog class="modal" :class="{ 'modal-open': showTemplateModal }">
-            <div class="modal-box bg-slate-800 border border-slate-700 w-11/12 max-w-5xl h-5/6 flex flex-col p-0">
-                <div class="flex justify-between items-center p-4 bg-slate-900 border-b border-slate-700">
-                    <h3 class="font-bold text-lg text-white">全局 Clash 模板</h3>
-                    <button class="btn btn-sm btn-circle btn-ghost" @click="showTemplateModal=false">✕</button>
-                </div>
-                <textarea v-model="templateContent" class="code-editor w-full h-full bg-[#1e1e1e] text-slate-300 p-4 outline-none resize-none text-sm"></textarea>
-                <div class="p-4 bg-slate-900 border-t border-slate-700 flex justify-end gap-2">
-                    <button class="btn btn-primary" @click="saveTemplate">保存配置</button>
-                </div>
-            </div>
-        </dialog>
-
         <div v-if="toast.show" class="toast toast-bottom toast-end z-50"><div class="alert shadow-lg text-white" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'"><span>{{ toast.message }}</span></div></div>
     </div>
 </div>
@@ -251,7 +236,6 @@ createApp({
         const groupModal = reactive({ show: false, isEdit: false }); const groupForm = ref({ id: null, name: '', config: [] })
         const nodeSelector = reactive({ show: false, loading: false, resourceId: null, resourceName: '', nodes: [], selected: 'all', tempSelected: [] })
         const previewModal = reactive({ show: false, nodes: [] })
-        const showTemplateModal = ref(false); const templateContent = ref('')
 
         const authFetch = async (url, opts = {}) => {
             opts.headers = { 'Authorization': localStorage.getItem('biaosub_token'), 'Content-Type': 'application/json', ...opts.headers }
@@ -322,7 +306,7 @@ createApp({
         const toggleResSelection = (id) => {
             const idx = groupForm.value.config.findIndex(x => x.subId === id)
             if (idx > -1) groupForm.value.config.splice(idx, 1)
-            else groupForm.value.config.push({ subId: id, include: 'all' }) // 默认为 "all" (非数组)
+            else groupForm.value.config.push({ subId: id, include: 'all' })
         }
         const getResourceName = (id) => resources.value.find(r => r.id === id)?.name || '未知资源'
 
@@ -343,7 +327,7 @@ createApp({
                     nodeSelector.tempSelected = [...currentConf.include]
                 } else {
                     nodeSelector.selected = 'all'
-                    nodeSelector.tempSelected = d.data.nodes.map(n => n.name) // 默认全选 UI
+                    nodeSelector.tempSelected = d.data.nodes.map(n => n.name) 
                 }
             } else {
                 showToast('加载节点失败', 'error')
@@ -353,7 +337,6 @@ createApp({
         const confirmNodeSelection = () => {
             const idx = groupForm.value.config.findIndex(x => x.subId === nodeSelector.resourceId)
             if (idx > -1) {
-                // 如果选择全部，config.include 设为字符串 'all'，否则设为数组
                 if (nodeSelector.selected === 'all') {
                     groupForm.value.config[idx].include = 'all'
                 } else {
@@ -373,10 +356,9 @@ createApp({
         const deleteGroup = async (id) => { if(confirm('删除此聚合组?')) { await authFetch(`${API}/groups/${id}`, { method: 'DELETE' }); loadGroups() } }
         const refreshToken = async (g) => { if(confirm('刷新密钥将导致旧链接失效，确定?')) { await authFetch(`${API}/groups/${g.id}`, { method: 'PUT', body: JSON.stringify({refresh_token: true}) }); loadGroups() } }
         
-        const copyGroupLink = (g, type) => {
+        const copyGroupLink = (g) => {
             const baseUrl = window.location.origin + '/api/g/' + g.token
-            const url = type === 'clash' ? baseUrl + '?format=clash' : baseUrl
-            copyText(url)
+            copyText(baseUrl)
         }
 
         // Other
@@ -385,17 +367,7 @@ createApp({
             const d = await res.json(); if(d.success) { previewModal.nodes = d.data.nodes; previewModal.show = true } else { showToast('预览失败', 'error') }
         }
         const copyAllPreviewNodes = () => { copyText(previewModal.nodes.map(n => n.link).join('\n')) }
-
-        const openTemplateModal = async () => {
-            const res = await authFetch(API+'/template/default'); const d = await res.json();
-            templateContent.value = d.data || ''; showTemplateModal.value = true
-        }
-        const saveTemplate = async () => {
-            await authFetch(API+'/template/default', { method: 'POST', body: JSON.stringify({content: templateContent.value}) })
-            showTemplateModal.value = false; showToast('模板已保存')
-        }
         
-        // Settings Stub
         const openSettings = () => showToast('功能开发中...') // 简化展示
         const logout = () => { localStorage.removeItem('biaosub_token'); isLoggedIn.value = false }
 
@@ -409,8 +381,7 @@ createApp({
             isResSelected, getResSelectionCount, toggleResSelection, getResourceName,
             nodeSelector, openNodeSelector, confirmNodeSelection,
             previewModal, previewNodes, copyText, copyAllPreviewNodes,
-            showTemplateModal, openTemplateModal, templateContent, saveTemplate, openSettings,
-            getProgressClass, isExpired
+            openSettings, getProgressClass, isExpired
         }
     }
 }).mount('#app')

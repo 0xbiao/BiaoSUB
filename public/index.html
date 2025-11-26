@@ -6,15 +6,12 @@
     <title>BiaoSUB 面板</title>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/daisyui@3.9.4/dist/full.css" rel="stylesheet" type="text/css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script>tailwind.config = { theme: { extend: { colors: { primary: '#6366f1', secondary: '#ec4899', accent: '#1fb2a6', } } } }</script>
     <style>
         body { background-color: #0f172a; background-image: radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), radial-gradient(at 50% 0%, hsla(225,39%,30%,1) 0, transparent 50%), radial-gradient(at 100% 0%, hsla(339,49%,30%,1) 0, transparent 50%); min-height: 100vh; }
         .glass-panel { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); }
-        textarea.code-editor { font-family: monospace; white-space: pre; overflow-wrap: normal; overflow-x: scroll; }
         .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
@@ -205,7 +202,7 @@
                             <span class="text-white font-bold truncate pr-2">{{ node.name }}</span>
                             <button @click="copyText(node.link)" class="btn btn-square btn-xs btn-ghost text-accent"><i class="fa-regular fa-copy"></i></button>
                         </div>
-                        <div class="font-mono mt-1 truncate opacity-50">{{ node.link }}</div>
+                        <div class="font-mono mt-1 truncate opacity-50 break-all">{{ node.link }}</div>
                     </div>
                 </div>
                 <div class="modal-action">
@@ -267,7 +264,6 @@ createApp({
             submitting.value = true
             const method = resourceModal.isEdit ? 'PUT' : 'POST'
             const url = resourceModal.isEdit ? `${API}/subs/${resourceForm.value.id}` : `${API}/subs`
-            // 每次保存都触发一次 Check 获取 info
             let info = null;
             if (resourceForm.value.url) {
                 try {
@@ -286,7 +282,6 @@ createApp({
             const res = await authFetch(API+'/check', { method: 'POST', body: JSON.stringify({url: item.url, type: item.type}) })
             const d = await res.json()
             if(d.success) {
-                // 更新 info 和 updated_at
                 await authFetch(`${API}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({info: d.data}) })
                 showToast('刷新成功')
             } else {
@@ -313,15 +308,11 @@ createApp({
         // Node Selector
         const openNodeSelector = async (res) => {
             nodeSelector.resourceId = res.id; nodeSelector.resourceName = res.name; nodeSelector.show = true; nodeSelector.loading = true
-            // 查找当前配置
             const currentConf = groupForm.value.config.find(c => c.subId === res.id)
-            
-            // 加载节点
             const checkRes = await authFetch(API+'/check', { method: 'POST', body: JSON.stringify({url: res.url, type: res.type}) })
             const d = await checkRes.json()
             if(d.success && d.data.nodes) {
                 nodeSelector.nodes = d.data.nodes
-                // 恢复选中状态
                 if (currentConf && Array.isArray(currentConf.include)) {
                     nodeSelector.selected = 'select'
                     nodeSelector.tempSelected = [...currentConf.include]
@@ -368,7 +359,7 @@ createApp({
         }
         const copyAllPreviewNodes = () => { copyText(previewModal.nodes.map(n => n.link).join('\n')) }
         
-        const openSettings = () => showToast('功能开发中...') // 简化展示
+        const openSettings = () => showToast('功能开发中...')
         const logout = () => { localStorage.removeItem('biaosub_token'); isLoggedIn.value = false }
 
         if(localStorage.getItem('biaosub_token')) { isLoggedIn.value = true; initData() }

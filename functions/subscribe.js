@@ -28,7 +28,7 @@ const deepBase64Decode = (str, depth = 0) => {
     } catch (e) { return str; }
 }
 
-// --- 2. 智能 Fetch ---
+// --- 2. 智能 Fetch (禁止缓存) ---
 const fetchWithSmartUA = async (url) => {
   const userAgents = ['ClashMeta/1.0', 'v2rayNG/1.8.5', 'Clash/1.0', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'];
   let bestRes = null;
@@ -36,7 +36,11 @@ const fetchWithSmartUA = async (url) => {
     try {
       const controller = new AbortController();
       const id = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch(url, { headers: { 'User-Agent': ua }, signal: controller.signal });
+      const res = await fetch(url, { 
+          headers: { 'User-Agent': ua }, 
+          signal: controller.signal,
+          cache: 'no-store' 
+      });
       clearTimeout(id);
       if (res.ok) {
         const clone = res.clone();
@@ -55,7 +59,6 @@ const generateNodeLink = (node) => {
     try {
         const safe = (s) => encodeURIComponent(s || '');
 
-        // 【透传优先逻辑】
         if (node.origLink) {
             try {
                 if (node.type !== 'vmess') {
@@ -281,10 +284,16 @@ app.get('/', async (c) => {
             const allowed = params.include?.length ? new Set(params.include) : null;
             for (const node of nodes) {
                 if (allowed && !allowed.has(node.name.trim())) continue;
-                allLinks.push(generateNodeLink(node)); // 触发透传
+                allLinks.push(generateNodeLink(node)); // 透传
             }
         }
-        return c.text(btoa(encodeURIComponent(allLinks.join('\n')).replace(/%([0-9A-F]{2})/g, (m, p1) => String.fromCharCode('0x' + p1))))
+        // 【关键修改】添加禁止缓存头
+        return c.text(btoa(encodeURIComponent(allLinks.join('\n')).replace(/%([0-9A-F]{2})/g, (m, p1) => String.fromCharCode('0x' + p1))), 200, {
+             'Content-Type': 'text/plain; charset=utf-8',
+             'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+             'Pragma': 'no-cache',
+             'Expires': '0'
+        })
     } catch(e) { return c.text(e.message, 500) }
 })
 

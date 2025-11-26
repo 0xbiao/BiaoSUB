@@ -28,7 +28,7 @@ const deepBase64Decode = (str, depth = 0) => {
     } catch (e) { return str; }
 }
 
-// --- 2. 智能 Fetch (同步) ---
+// --- 2. 智能 Fetch ---
 const fetchWithSmartUA = async (url) => {
   const userAgents = ['ClashMeta/1.0', 'v2rayNG/1.8.5', 'Clash/1.0', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'];
   let bestRes = null;
@@ -115,7 +115,7 @@ const generateNodeLink = (node) => {
     } catch (e) { return ''; }
 }
 
-// --- 4. 解析器 (增强版) ---
+// --- 4. 解析器 ---
 const parseYamlProxies = (content) => {
     const nodes = [];
     if (!content) return nodes;
@@ -208,33 +208,27 @@ const parseNodesCommon = (text) => {
                     "client-fingerprint": params.get('fp')
                 };
                 
-                // 修复 SS 逻辑
+                // 修复 SS
                 if (protocol === 'ss') {
-                    let rawUser = url.username; // URL已解码了 %3A
-                    let rawPass = url.password;
-                    
-                    // 尝试解析 Base64 (SIP002)
-                    if (!rawPass && !rawUser.includes(':')) {
-                         try {
-                             const decoded = safeBase64Decode(rawUser);
-                             if (decoded && decoded.includes(':')) {
-                                 const parts = decoded.split(':');
-                                 node.cipher = parts[0];
-                                 node.password = parts.slice(1).join(':');
-                             }
-                         } catch(e) {}
+                    let userStr = url.username;
+                    try { userStr = decodeURIComponent(url.username); } catch(e) {}
+                    if (userStr.includes(':')) {
+                        const parts = userStr.split(':');
+                        node.cipher = parts[0];
+                        node.password = parts.slice(1).join(':');
+                    } else {
+                        try {
+                            const decoded = safeBase64Decode(url.username);
+                            if (decoded && decoded.includes(':')) {
+                                const parts = decoded.split(':');
+                                node.cipher = parts[0];
+                                node.password = parts.slice(1).join(':');
+                            }
+                        } catch(e) {}
                     }
-                    
-                    // 如果上面没解析出来，或者本身就是 cipher:pass 结构
-                    if (!node.cipher) {
-                        if (rawUser.includes(':') && !rawPass) {
-                             const parts = rawUser.split(':');
-                             node.cipher = parts[0];
-                             node.password = parts.slice(1).join(':');
-                        } else {
-                             node.cipher = rawUser;
-                             node.password = rawPass;
-                        }
+                    if (!node.cipher && url.password) {
+                        node.cipher = decodeURIComponent(url.username);
+                        node.password = decodeURIComponent(url.password);
                     }
                 }
                 
@@ -260,7 +254,7 @@ app.get('/', async (c) => {
         const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1 ORDER BY sort_order ASC, id DESC").all()
         let allLinks = []
         for (const sub of results) {
-            // 严格状态检查
+            // 严格过滤：再次确认状态
             if (Number(sub.status) !== 1) continue;
 
             let rawContent = "";

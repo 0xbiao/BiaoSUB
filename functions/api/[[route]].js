@@ -38,17 +38,25 @@ const safeBase64Decode = (str) => {
     } catch (e) { return str; }
 }
 const safeBase64Encode = (str) => { try { return btoa(unescape(encodeURIComponent(str))); } catch (e) { return btoa(str); } }
+
 const deepBase64Decode = (str, depth = 0) => {
     if (depth > 3) return str;
     if (!str || typeof str !== 'string') return str;
     try {
         const clean = str.replace(/\s/g, '');
-        if (!/^[A-Za-z0-9+/=_:-]+$/.test(clean) || clean.length < 10) return str;
-        if (clean.includes('proxies:') || clean.includes('mixed-port:') || clean.includes('proxy-groups:')) return str;
+        // 简单放宽检查，防止误杀
+        if (clean.length < 10) return str;
+        // 如果包含明文特征，直接返回，不再解码
+        if (clean.includes('proxies:') || clean.includes('mixed-port:') || clean.includes('ss://') || clean.includes('vmess://')) return str;
+        
         let safeStr = clean.replace(/-/g, '+').replace(/_/g, '/');
         while (safeStr.length % 4) safeStr += '=';
         const decoded = new TextDecoder('utf-8').decode(Uint8Array.from(atob(safeStr), c => c.charCodeAt(0)));
-        if (decoded.includes('://') || decoded.includes('proxies:') || decoded.includes('server:')) return deepBase64Decode(decoded, depth + 1);
+        
+        // 如果解码后看起来还是 Base64 或者包含 URL 编码，递归
+        if (decoded.includes('://') || decoded.includes('proxies:') || decoded.includes('server:')) {
+            return deepBase64Decode(decoded, depth + 1); // 可能是多重 Base64
+        }
         return decoded;
     } catch (e) { return str; }
 }
@@ -76,7 +84,7 @@ const fetchWithSmartUA = async (url) => {
   for (const ua of userAgents) {
     try {
       const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), 10000);
+      const id = setTimeout(() => controller.abort(), 15000); // 延长一点超时
       const res = await fetch(url, { 
           headers: { 'User-Agent': ua }, 
           signal: controller.signal,
@@ -88,12 +96,8 @@ const fetchWithSmartUA = async (url) => {
         const text = await clone.text();
         if (text.includes('<!DOCTYPE html>') || text.includes('<html')) continue;
         
-        // 提取流量信息
         const info = extractUserInfo(res.headers);
-        if (info) {
-            // 将流量信息挂载到 response 对象上返回，以便后续处理
-            Object.defineProperty(res, 'trafficInfo', { value: info, writable: true });
-        }
+        if (info) Object.defineProperty(res, 'trafficInfo', { value: info, writable: true });
         Object.defineProperty(res, 'prefetchedText', { value: text, writable: true });
         return res;
       }
@@ -102,11 +106,50 @@ const fetchWithSmartUA = async (url) => {
   return bestRes;
 }
 
-// --- 核心：生成链接 (透传优先) ---
+// --- 核心：生成链接 (强力透传模式) ---
 const generateNodeLink = (node) => {
+    // 优先 1: 如果有原始链接，尽最大努力只修改名称(PS/Hash)并返回原始链接
+    if (node.origLink) {
+        try {
+            const safeName = encodeURIComponent(node.name || '');
+            
+            // VMess: 必须解码 JSON 修改 ps 字段
+            if (node.origLink.startsWith('vmess://')) {
+                const base64Part = node.origLink.substring(8);
+                try {
+                    const jsonStr = safeBase64Decode(base64Part);
+                    const vmessObj = JSON.parse(jsonStr);
+                    vmessObj.ps = node.name;
+                    return 'vmess://' + safeBase64Encode(JSON.stringify(vmessObj));
+                } catch(e) {
+                    // 如果解析失败，直接返回原始链接，放弃改名
+                    return node.origLink;
+                }
+            }
+            
+            // 其他 URL 类型 (ss, vless, trojan, hysteria...): 修改 Hash 部分
+            // 尝试构建 URL 对象
+            try {
+                const u = new URL(node.origLink);
+                u.hash = safeName;
+                return u.toString();
+            } catch(e) {
+                // 如果 URL 对象解析失败，进行字符串替换
+                const hashIndex = node.origLink.lastIndexOf('#');
+                if (hashIndex !== -1) {
+                    return node.origLink.substring(0, hashIndex) + '#' + safeName;
+                } else {
+                    return node.origLink + '#' + safeName;
+                }
+            }
+        } catch (e) {
+            // 万一所有修改尝试都失败，返回原始链接，保底
+            return node.origLink;
+        }
+    }
+
+    // 优先 2: 如果没有原始链接 (比如来自 YAML 解析)，尝试根据字段构建
     try {
-        const safe = (s) => encodeURIComponent(s || '');
-        // 1. VMess 必须重组 (Base64 JSON)
         if (node.type === 'vmess') {
             const vmessObj = {
                 v: "2", ps: node.name, add: node.server, port: node.port, id: node.uuid,
@@ -120,143 +163,223 @@ const generateNodeLink = (node) => {
             if (node.flow) vmessObj.flow = node.flow;
             return 'vmess://' + safeBase64Encode(JSON.stringify(vmessObj));
         }
-        // 2. 其他协议透传，仅修改 Hash
-        if (node.origLink) {
-            try {
-                const u = new URL(node.origLink);
-                u.hash = safe(node.name);
-                return u.toString();
-            } catch(e) {
-                const hashIndex = node.origLink.lastIndexOf('#');
-                if (hashIndex !== -1) return node.origLink.substring(0, hashIndex) + '#' + safe(node.name);
-                return node.origLink + '#' + safe(node.name);
-            }
-        }
-        return node.link || '';
+        // 这里可以补充 SS 等其他协议的构建逻辑，但目前的解析器主要依赖原始链接
+        // 对于 YAML 导入的非 VMess 节点，目前仅支持基础属性，如有需要可继续扩展
+        return ''; 
     } catch (e) { return ''; }
 }
 
-// --- 核心：解析器 ---
+// --- 核心：解析器 (增强版) ---
 const parseNodesCommon = (text) => {
     let nodes = [];
+    // 尝试解码，如果不是 Base64 则保持原样
     let decoded = deepBase64Decode(text);
-    
-    // 简单判断是否是 YAML (虽然我们删除了 Clash 生成，但解析还是要兼容)
-    if (decoded.includes('proxies:') || decoded.includes('Proxy:') || decoded.includes('- name:')) {
+    if (!decoded) return [];
+
+    // 1. 尝试 YAML 解析 (兼容 Clash 格式)
+    if (decoded.includes('proxies:') || decoded.includes('Proxy:') || /^\s*-\s*name:/m.test(decoded)) {
         const lines = decoded.split(/\r?\n/);
         let inProxyBlock = false;
-        const parseLineObj = (line) => {
-            const getVal = (k) => { const reg = new RegExp(`${k}:\\s*(?:['"](.*?)['"]|(.*?))(?:$|,|\\}|\\n)`, 'i'); const m = line.match(reg); return m ? (m[1] || m[2]).trim() : undefined; };
+        
+        const parseLineObj = (lineStr) => {
+            // 增强的正则提取，兼容更多格式
+            const getVal = (k) => { 
+                const reg = new RegExp(`${k}:\\s*(?:['"](.*?)['"]|(.*?))(?:$|,|\\}|\\n)`, 'i'); 
+                const m = lineStr.match(reg); 
+                return m ? (m[1] || m[2]).trim() : undefined; 
+            };
+
             let type = getVal('type'), server = getVal('server'), port = getVal('port'), name = getVal('name');
-            if (!type && line.includes('ss')) type = 'ss'; if (!type && line.includes('vmess')) type = 'vmess';
+            
+            // 修正部分常见缩写或缺失
+            if (!type && lineStr.includes('ss')) type = 'ss'; 
+            if (!type && lineStr.includes('vmess')) type = 'vmess';
+
             if (type && server && port) {
-                 const node = { name: name || `${type}-${server}`, type, server, port, cipher: getVal('cipher'), uuid: getVal('uuid'), password: getVal('password'), tls: line.includes('tls: true') || getVal('tls') === 'true', "skip-cert-verify": line.includes('skip-cert-verify: true'), servername: getVal('servername') || getVal('sni'), sni: getVal('sni'), network: getVal('network'), "ws-opts": undefined };
-                if (node.network === 'ws') { node["ws-opts"] = { path: getVal('path')||'/', headers: { Host: getVal('host')||'' } }; }
-                node.link = generateNodeLink(node); nodes.push(node);
+                 const node = { 
+                     name: name || `${type}-${server}`, 
+                     type, server, port, 
+                     cipher: getVal('cipher'), 
+                     uuid: getVal('uuid'), 
+                     password: getVal('password'), 
+                     tls: lineStr.includes('tls: true') || getVal('tls') === 'true', 
+                     "skip-cert-verify": lineStr.includes('skip-cert-verify: true'), 
+                     servername: getVal('servername') || getVal('sni'), 
+                     sni: getVal('sni'), 
+                     network: getVal('network'), 
+                     "ws-opts": undefined 
+                };
+                
+                // WS 提取
+                if (node.network === 'ws' || lineStr.includes('network: ws')) {
+                    node.network = 'ws';
+                    const path = getVal('path');
+                    const host = getVal('host') || getVal('headers.*?Host'); // 简单尝试提取 Host
+                    node["ws-opts"] = { path: path||'/', headers: { Host: host||'' } }; 
+                }
+                
+                // YAML 解析出来的没有 origLink，必须完全依赖构建
+                node.link = generateNodeLink(node); 
+                nodes.push(node);
             }
         }
+
+        // 遍历行处理
+        let buffer = ""; 
         for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trim(); if (!line) continue;
+            const line = lines[i].trim();
+            if (!line) continue;
+            
+            // 简单状态机
             if (/^(proxies|Proxy):/i.test(line)) { inProxyBlock = true; continue; }
             if (/^(proxy-groups|rules|rule-providers):/i.test(line)) { inProxyBlock = false; break; }
-            if (inProxyBlock && line.startsWith('-')) { if (line.includes('name:') && line.includes('server:')) { parseLineObj(line); } else { let temp = line; let j = 1; while (i + j < lines.length && !lines[i+j].trim().startsWith('-')) { temp += " " + lines[i+j].trim(); j++; } parseLineObj(temp); } }
+            
+            if (inProxyBlock) {
+                if (line.startsWith('-')) {
+                    // 处理上一条 buffer
+                    if (buffer) parseLineObj(buffer);
+                    buffer = line;
+                } else {
+                    // 追加到当前 buffer (处理多行定义)
+                    buffer += " " + line;
+                }
+            }
         }
+        if (buffer) parseLineObj(buffer); // 处理最后一条
+        
         if (nodes.length > 0) return nodes;
     }
 
-    // 通用链接处理
+    // 2. 通用链接处理 (Base64 解码后的文本行)
+    // 强制给协议头加上换行，防止挤在一行
     const splitText = decoded.replace(/(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//gi, '\n$1://');
     const lines = splitText.split(/[\r\n]+/);
+    
     for (const line of lines) {
         const trimLine = line.trim(); 
         if (!trimLine || trimLine.length < 10) continue;
+        
+        // 必须是已知协议开头
+        if (!/^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//i.test(trimLine)) continue;
+
         try {
+            // VMess 特殊处理
             if (trimLine.startsWith('vmess://')) {
-                const c = JSON.parse(safeBase64Decode(trimLine.substring(8)));
-                nodes.push({ name: c.ps, type: 'vmess', server: c.add, port: c.port, uuid: c.id, cipher: c.scy||'auto', network: c.net, tls: c.tls==='tls', "ws-opts": c.net==='ws' ? { path: c.path, headers: { Host: c.host } } : undefined, flow: c.flow, link: trimLine, origLink: trimLine });
+                const b64 = trimLine.substring(8);
+                const c = JSON.parse(safeBase64Decode(b64));
+                nodes.push({ 
+                    name: c.ps, type: 'vmess', server: c.add, port: c.port, 
+                    uuid: c.id, cipher: c.scy||'auto', network: c.net, 
+                    tls: c.tls==='tls', 
+                    "ws-opts": c.net==='ws' ? { path: c.path, headers: { Host: c.host } } : undefined, 
+                    flow: c.flow, 
+                    link: trimLine, // 这里的 link 暂时存着
+                    origLink: trimLine // 关键：保存原始链接
+                });
                 continue;
             }
-            if (/^(vless|ss|trojan|hysteria2?|tuic):\/\//i.test(trimLine)) {
-                const url = new URL(trimLine); const params = url.searchParams; const protocol = url.protocol.replace(':', '');
-                let node = { name: decodeURIComponent(url.hash.substring(1)), type: protocol === 'hysteria' ? 'hysteria2' : protocol, server: url.hostname, port: parseInt(url.port), uuid: url.username, password: url.password || url.username, tls: params.get('security') === 'tls' || protocol === 'hysteria2' || protocol === 'tuic', network: params.get('type') || 'tcp', sni: params.get('sni'), servername: params.get('sni') || params.get('host'), "skip-cert-verify": params.get('allowInsecure') === '1' || params.get('insecure') === '1', flow: params.get('flow'), "client-fingerprint": params.get('fp'), origLink: trimLine };
-                if (protocol === 'ss') { let userStr = url.username; try { userStr = decodeURIComponent(url.username); } catch(e) {} if (userStr.includes(':')) { const parts = userStr.split(':'); node.cipher = parts[0]; node.password = parts.slice(1).join(':'); } else { try { const decoded = safeBase64Decode(url.username); if (decoded && decoded.includes(':')) { const parts = decoded.split(':'); node.cipher = parts[0]; node.password = parts.slice(1).join(':'); } } catch(e) {} } if (!node.cipher && url.password) { node.cipher = decodeURIComponent(url.username); node.password = decodeURIComponent(url.password); } }
-                if (node.network === 'ws') node['ws-opts'] = { path: params.get('path')||'/', headers: { Host: params.get('host')||node.servername } };
-                if (params.get('security') === 'reality') { node.tls = true; node.reality = { publicKey: params.get('pbk'), shortId: params.get('sid') }; if(!node['client-fingerprint']) node['client-fingerprint']='chrome'; }
-                if (protocol === 'hysteria2') { node.obfs = params.get('obfs'); node['obfs-password'] = params.get('obfs-password'); node.udp = true; }
-                if (protocol === 'tuic') { node['congestion-controller'] = params.get('congestion_control'); node['udp-relay-mode'] = params.get('udp_relay_mode'); node.alpn = [params.get('alpn')||'h3']; node.udp = true; }
-                if ((protocol === 'vless' || protocol === 'trojan') && node.network === 'ws') node.udp = true;
-                nodes.push(node);
+
+            // URL 类协议解析
+            const url = new URL(trimLine); 
+            const params = url.searchParams; 
+            const protocol = url.protocol.replace(':', '');
+            
+            // 基础信息提取，主要是为了前端展示 valid check，核心还是靠 origLink
+            let node = { 
+                name: decodeURIComponent(url.hash.substring(1)), 
+                type: protocol === 'hysteria' ? 'hysteria2' : protocol, 
+                server: url.hostname, 
+                port: parseInt(url.port),
+                origLink: trimLine 
+            };
+            
+            // 仅做简单填充，为了 generateNodeLink 的 fallback，主要依赖 origLink
+            nodes.push(node);
+        } catch(e) {
+            // 解析失败时，如果看起来像个链接，也强行加入，保留原始链接
+            if (trimLine.includes('://')) {
+                nodes.push({ name: 'Unknown Node', type: 'raw', origLink: trimLine });
             }
-        } catch(e) {}
+        }
     }
-    return nodes.map(n => { if (!n.link) n.link = generateNodeLink(n); return n; });
+    
+    // 最后统一生成/修正 link 字段
+    return nodes.map(n => { 
+        n.link = generateNodeLink(n); 
+        // 如果名字是空的，尝试从 link 里截取或者默认
+        if (!n.name && n.link) {
+            try {
+               if(n.link.startsWith('vmess://')) {
+                   const c = JSON.parse(safeBase64Decode(n.link.substring(8)));
+                   n.name = c.ps;
+               } else {
+                   const u = new URL(n.link);
+                   n.name = decodeURIComponent(u.hash.substring(1));
+               }
+            } catch(e){}
+        }
+        if (!n.name) n.name = "Node";
+        return n; 
+    }).filter(n => n.link && n.link.length > 0); // 过滤掉无效节点
 }
 
-// --- 核心路由：聚合组订阅入口 (无需密码) ---
+// --- 核心路由：聚合组订阅入口 ---
 app.get('/g/:token', async (c) => {
     const token = c.req.param('token');
-    const format = c.req.query('format') || 'base64'; // clash or base64
     
     try {
         // 1. 查找聚合组
         const group = await c.env.DB.prepare("SELECT * FROM groups WHERE token = ? AND status = 1").bind(token).first();
         if (!group) return c.text('Invalid Group Token', 404);
 
-        const config = JSON.parse(group.config || '[]'); // 结构: [{ subId: 1, include: 'all' OR ['Node A'] }]
+        const config = JSON.parse(group.config || '[]'); 
         
         // 2. 遍历配置，获取节点
         let allNodes = [];
         for (const item of config) {
             const sub = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE id = ?").bind(item.subId).first();
-            if (!sub) continue; // 如果订阅不存在，跳过
+            if (!sub) continue; 
 
             let content = "";
             if (sub.type === 'node') {
                 content = sub.url;
             } else {
-                // 强制从网络拉取，不使用缓存，确保获取最新节点
                 const res = await fetchWithSmartUA(sub.url);
                 if (res && res.ok) content = res.prefetchedText || await res.text();
             }
             
-            if (!content) continue; // 如果内容为空，跳过
+            if (!content) continue;
 
             const nodes = parseNodesCommon(content);
-            // 解析配置中的筛选规则
+            
             let allowed = 'all';
             if (item.include && Array.isArray(item.include) && item.include.length > 0) {
                 allowed = new Set(item.include);
             }
 
             for (const node of nodes) {
-                // 筛选逻辑
                 if (allowed !== 'all' && !allowed.has(node.name)) continue;
 
-                // 重名处理 (简单追加序号)
+                // 重名处理
                 let name = node.name.trim();
                 let i = 1;
                 while (allNodes.some(n => n.name === name)) name = `${node.name} ${i++}`;
+                
+                // 更新节点名称
                 node.name = name;
+                // 重新生成链接以应用新名称
+                node.link = generateNodeLink(node);
                 
                 allNodes.push(node);
             }
         }
 
-        // 3. 输出结果
-        if (format === 'clash') {
-            // 暂时移除 Clash 生成逻辑，返回占位符
-            return c.text("# Clash support is temporarily disabled in this version.\n# Please use V2Ray/Base64 subscription.", 200, { 
-                'Content-Type': 'text/plain; charset=utf-8', 
-                'Cache-Control': 'no-store' 
-            });
-        } else {
-            // Base64 (V2RayN) - 严格透传
-            const links = allNodes.map(node => generateNodeLink(node));
-            return c.text(btoa(encodeURIComponent(links.join('\n')).replace(/%([0-9A-F]{2})/g, (m, p1) => String.fromCharCode('0x' + p1))), 200, { 
-                'Content-Type': 'text/plain; charset=utf-8', 
-                'Cache-Control': 'no-store' 
-            });
-        }
+        // 3. 输出结果 (仅 Base64)
+        const links = allNodes.map(node => node.link).filter(l => l);
+        return c.text(btoa(encodeURIComponent(links.join('\n')).replace(/%([0-9A-F]{2})/g, (m, p1) => String.fromCharCode('0x' + p1))), 200, { 
+            'Content-Type': 'text/plain; charset=utf-8', 
+            'Cache-Control': 'no-store' 
+        });
 
     } catch(e) { return c.text(e.message, 500); }
 })
@@ -264,7 +387,6 @@ app.get('/g/:token', async (c) => {
 // --- 资源池管理 (Subscriptions) ---
 app.get('/subs', async (c) => { 
     const {results} = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all(); 
-    // 解析 info 字段，确保前端能读到流量信息
     return c.json({success:true, data:results.map(i=>{
         try { i.info = JSON.parse(i.info); } catch(e) { i.info = {}; }
         return i;
@@ -316,15 +438,12 @@ app.post('/check', async (c) => {
             content = res.prefetchedText || await res.text();
             if(res.trafficInfo) stats = res.trafficInfo;
         }
-        const rawNodes = parseNodesCommon(content);
-        const nodes = rawNodes.map(n => ({ ...n, link: generateNodeLink(n) }));
+        const nodes = parseNodesCommon(content);
         return c.json({ success: true, data: { valid: true, nodeCount: nodes.length, stats, nodes } });
     } catch(e) { return c.json({ success: false, error: e.message }) }
 })
 
 app.post('/login', async (c) => { const {password}=await c.req.json(); return c.json({success: password===c.env.ADMIN_PASSWORD}) })
-app.get('/template/default', async (c) => { const {results}=await c.env.DB.prepare("SELECT content FROM templates WHERE is_default=1").all(); return c.json({success:true, data: results[0]?.content||""}) })
-app.post('/template/default', async (c) => { const {content}=await c.req.json(); await c.env.DB.prepare("UPDATE templates SET content=? WHERE is_default=1").bind(content).run(); return c.json({success:true}) })
 app.get('/settings', async(c)=>{return c.json({success:true,data:{}})}) 
 app.post('/settings', async(c)=>{return c.json({success:true})})
 app.post('/backup/import', async (c) => { 

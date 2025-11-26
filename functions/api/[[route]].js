@@ -29,7 +29,6 @@ const formatBytes = (bytes) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
 
-// 强健的 UTF-8 Base64 编解码，解决 Emoji 乱码问题
 const safeBase64Decode = (str) => {
     if (!str) return '';
     try {
@@ -55,8 +54,10 @@ const deepBase64Decode = (str, depth = 0) => {
     if (!str || typeof str !== 'string') return str;
     try {
         const clean = str.replace(/\s/g, '');
-        if (clean.length < 10 || clean.includes('proxies:') || clean.includes('://')) return str;
+        // 关键：如果不是 URL Safe Base64 字符集，或者太短，直接返回原样
+        if (clean.length < 10 || /[^A-Za-z0-9+/=_]/.test(clean)) return str;
         
+        // 尝试解码
         let safeStr = clean.replace(/-/g, '+').replace(/_/g, '/');
         while (safeStr.length % 4) safeStr += '=';
         
@@ -65,9 +66,14 @@ const deepBase64Decode = (str, depth = 0) => {
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
         const decoded = new TextDecoder('utf-8').decode(bytes);
 
-        if (decoded.includes('://') || decoded.includes('proxies:') || decoded.includes('server:')) {
+        // 递归检查：如果解码后的内容看起来还是 Base64，或者包含特定的编码特征
+        if (decoded.includes('://') || decoded.includes('proxies:') || decoded.includes('server:') || decoded.includes('vmess://')) {
+            // 如果是 vmess 等协议，说明解码成功，尝试是否还有套娃
             return deepBase64Decode(decoded, depth + 1);
         }
+        // 如果解码出来是乱码（非UTF8文本），通常意味着它不是我们要的文本 Base64，回退
+        if (/[\x00-\x08\x0E-\x1F]/.test(decoded)) return str;
+        
         return decoded;
     } catch (e) { return str; }
 }
@@ -90,6 +96,7 @@ const extractUserInfo = (headers) => {
 }
 
 const fetchWithSmartUA = async (url) => {
+  // 调整 UA 顺序，ClashMeta 优先，有助于获取更全的 YAML 配置
   const userAgents = ['ClashMeta/1.0', 'v2rayNG/1.8.5', 'Mozilla/5.0'];
   let bestRes = null;
   for (const ua of userAgents) {
@@ -112,35 +119,30 @@ const fetchWithSmartUA = async (url) => {
   return bestRes;
 }
 
-// --- 核心：生成链接 (增强版：支持 YAML 逆向转换 + 原始链接透传) ---
+// --- 核心：生成链接 (增强版) ---
 const generateNodeLink = (node) => {
     const safeName = encodeURIComponent(node.name || 'Node');
 
-    // 策略 1: 如果有原始链接，优先使用 (解决 jisu 等复杂链接解析损耗问题)
+    // 优先使用原始链接，并尝试替换 Hash 部分
     if (node.origLink) {
         try {
-            // VMess 特殊处理 (Base64 JSON)
             if (node.origLink.startsWith('vmess://')) {
                 const base64Part = node.origLink.substring(8);
                 const jsonStr = safeBase64Decode(base64Part);
                 const vmessObj = JSON.parse(jsonStr);
-                vmessObj.ps = node.name; // 更新名称
+                vmessObj.ps = node.name; 
                 return 'vmess://' + safeBase64Encode(JSON.stringify(vmessObj));
             }
-            
-            // 尝试 URL 解析
-            const u = new URL(node.origLink);
-            u.hash = safeName;
-            return u.toString();
-        } catch(e) {
-            // URL 解析失败 (可能是 hysteiya2 等特殊格式)，使用字符串替换保底
+            // 暴力字符串替换保底，防止 URL 解析失败
             const hashIndex = node.origLink.lastIndexOf('#');
             if (hashIndex !== -1) return node.origLink.substring(0, hashIndex) + '#' + safeName;
             return node.origLink + '#' + safeName;
+        } catch(e) {
+            return node.origLink; // 实在不行返回原样
         }
     }
 
-    // 策略 2: 逆向构建链接 (解决 YAML/Clash 订阅问题)
+    // 逆向构建 (针对 YAML 来源)
     try {
         if (node.type === 'vmess') {
             const vmessObj = {
@@ -156,7 +158,6 @@ const generateNodeLink = (node) => {
         }
 
         if (node.type === 'vless' || node.type === 'trojan') {
-            const type = node.type;
             const params = new URLSearchParams();
             params.set('security', node.tls ? (node.reality ? 'reality' : 'tls') : 'none');
             if (node.network) params.set('type', node.network);
@@ -168,14 +169,12 @@ const generateNodeLink = (node) => {
                 if (node['ws-opts'].path) params.set('path', node['ws-opts'].path);
                 if (node['ws-opts'].headers && node['ws-opts'].headers.Host) params.set('host', node['ws-opts'].headers.Host);
             }
-            
             if (node.reality && node.reality.publicKey) {
                 params.set('pbk', node.reality.publicKey);
                 if (node.reality.shortId) params.set('sid', node.reality.shortId);
             }
-
-            const userInfo = (type === 'vless') ? node.uuid : (node.password || node.uuid);
-            return `${type}://${userInfo}@${node.server}:${node.port}?${params.toString()}#${safeName}`;
+            const userInfo = (node.type === 'vless') ? node.uuid : (node.password || node.uuid);
+            return `${node.type}://${userInfo}@${node.server}:${node.port}?${params.toString()}#${safeName}`;
         }
 
         if (node.type === 'hysteria2') {
@@ -191,19 +190,20 @@ const generateNodeLink = (node) => {
              return `ss://${userPart}@${node.server}:${node.port}#${safeName}`;
         }
 
-    } catch (e) { console.error('Build Link Error:', e); }
-
+    } catch (e) {}
     return '';
 }
 
-// --- 核心：解析器 (深度解析 YAML) ---
+// --- 核心：解析器 (修复版) ---
 const parseNodesCommon = (text) => {
     let nodes = [];
+    // 尝试解码，如果失败则使用原文
     let decoded = deepBase64Decode(text);
-    if (!decoded) return [];
+    if (!decoded) decoded = text;
 
-    // 1. YAML / Clash 解析 (关键升级)
-    if (decoded.includes('proxies:') || /^\s*-\s*name:/m.test(decoded)) {
+    // 1. YAML / Clash 解析 (严格模式)
+    // 只有明确包含 proxies 关键字才进入 YAML 模式
+    if (/^proxies:/m.test(decoded)) {
         try {
             const lines = decoded.split(/\r?\n/);
             let inProxyBlock = false;
@@ -219,24 +219,23 @@ const parseNodesCommon = (text) => {
                     return (m[1] || m[2]).trim();
                 };
                 
-                // 深度提取嵌套对象 (ws-opts, reality-opts)
                 const getNestedVal = (parentKey, childKey) => {
                     let parentIdx = block.findIndex(l => new RegExp(`^\\s*${parentKey}:`).test(l));
                     if (parentIdx === -1) return undefined;
-                    // 简单查找接下来的几行
                     for (let i = parentIdx + 1; i < block.length; i++) {
                         if (block[i].trim().startsWith(childKey + ':')) {
                              const m = block[i].match(/:\s*(?:['"](.*?)['"]|(.*?))$/);
                              return m ? (m[1] || m[2]).trim() : undefined;
                         }
-                        // 如果缩进变回去了，说明块结束
+                        // 缩进检查，防止读出界
                         if (block[i].search(/\S/) <= block[parentIdx].search(/\S/)) break;
                     }
                     return undefined;
                 }
 
                 let type = getVal('type');
-                if (!type) return;
+                // 排除不支持的类型 (如 url-test, selector, direct 等)
+                if (!type || ['url-test', 'selector', 'fallback', 'direct', 'reject', 'load-balance'].includes(type)) return;
 
                 const node = {
                     name: getVal('name'),
@@ -256,19 +255,16 @@ const parseNodesCommon = (text) => {
                     "client-fingerprint": getVal('client-fingerprint')
                 };
 
-                // 特殊字段映射补全
                 if (!node.sni && node.servername) node.sni = node.servername;
                 if (!node.servername && node.sni) node.servername = node.sni;
 
-                // 提取 WS 选项
                 const wsPath = getNestedVal('ws-opts', 'path') || getVal('ws-path');
-                const wsHost = getNestedVal('headers', 'Host') || getVal('ws-headers'); // 简化的 headers 查找
+                const wsHost = getNestedVal('headers', 'Host') || getNestedVal('ws-headers', 'Host');
                 if (wsPath || wsHost || node.network === 'ws') {
                     node.network = 'ws';
                     node['ws-opts'] = { path: wsPath || '/', headers: { Host: wsHost || '' } };
                 }
 
-                // 提取 Reality 选项
                 const pbk = getNestedVal('reality-opts', 'public-key');
                 const sid = getNestedVal('reality-opts', 'short-id');
                 if (pbk) {
@@ -278,41 +274,54 @@ const parseNodesCommon = (text) => {
                 }
 
                 if (node.server && node.port) {
-                    node.link = generateNodeLink(node); // 立即生成链接
+                    node.link = generateNodeLink(node);
                     nodes.push(node);
                 }
             };
 
             for (const line of lines) {
+                // 跳过注释和空行
                 if (!line.trim() || line.trim().startsWith('#')) continue;
-                const indent = line.search(/\S/);
-
-                if (/^(proxies|Proxy):/i.test(line)) { inProxyBlock = true; continue; }
-                if (!inProxyBlock) continue;
-                if (/^(proxy-groups|rules|rule-providers):/i.test(line)) break;
-
-                if (line.trim().startsWith('-')) {
+                
+                // 严格的状态机
+                if (/^proxies:/i.test(line)) { inProxyBlock = true; continue; }
+                
+                // 如果遇到其他顶级 Key，退出 Proxy 块
+                if (inProxyBlock && /^[a-zA-Z0-9_-]+:/i.test(line) && !line.startsWith(' ')) {
                     if (blockBuffer.length > 0) processBlock(blockBuffer);
-                    blockBuffer = [line.replace(/^(\s*)-\s*/, '$1  ')]; // 去掉 - 变成属性行
-                    currentIndent = indent;
-                } else if (indent > currentIndent && blockBuffer.length > 0) {
-                    blockBuffer.push(line);
+                    inProxyBlock = false;
+                    blockBuffer = [];
+                    // 已经离开了 proxies 区域，直接中断循环，避免读取后面的 rule-providers
+                    break;
+                }
+
+                if (inProxyBlock) {
+                    if (line.trim().startsWith('-')) {
+                        if (blockBuffer.length > 0) processBlock(blockBuffer);
+                        blockBuffer = [line.replace(/^(\s*)-\s*/, '$1  ')]; // 归一化缩进
+                        currentIndent = line.search(/\S/);
+                    } else if (blockBuffer.length > 0) {
+                        blockBuffer.push(line);
+                    }
                 }
             }
-            if (blockBuffer.length > 0) processBlock(blockBuffer);
-
+            if (blockBuffer.length > 0) processBlock(blockBuffer); // 处理最后一个
         } catch (e) { console.error('YAML Parse Error', e); }
         
         if (nodes.length > 0) return nodes;
     }
 
-    // 2. 常规链接解析 (Base64 -> List)
-    const splitText = decoded.replace(/(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//gi, '\n$1://');
+    // 2. 常规链接解析 (严厉过滤)
+    // 移除 http/https，只保留明确的代理协议
+    const splitText = decoded.replace(/(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive):\/\//gi, '\n$1://');
     const lines = splitText.split(/[\r\n]+/);
     for (const line of lines) {
         const trimLine = line.trim();
+        // 长度过短直接忽略
         if (!trimLine || trimLine.length < 10) continue;
-        if (!trimLine.includes('://')) continue;
+        
+        // 必须以特定协议开头，彻底屏蔽 http/https
+        if (!/^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive):\/\//i.test(trimLine)) continue;
 
         try {
             let node = { origLink: trimLine, type: 'raw' };
@@ -329,15 +338,23 @@ const parseNodesCommon = (text) => {
                     node.server = url.hostname;
                     node.port = url.port;
                 } catch(e) {
-                    // 解析失败也保留，作为 raw 节点
+                    // 如果 URL 解析失败（比如 hysteria2 可能不符合标准 URL 规范），做个简单的正则提取作为保底
+                    const match = trimLine.match(/^(.*?):\/\/.*?#(.*?)$/);
+                    if (match) {
+                        node.name = decodeURIComponent(match[2]);
+                        node.type = match[1];
+                    }
                 }
             }
+            // 双重保险：如果没有名字，说明解析可能失败
+            if (!node.name) node.name = 'Node';
+            
             node.link = generateNodeLink(node);
             nodes.push(node);
         } catch(e) {}
     }
 
-    return nodes.filter(n => n.link && n.link.length > 10);
+    return nodes.filter(n => n.link && n.link.length > 15); // 过滤极短的无效链接
 }
 
 // --- API 路由 ---
@@ -368,13 +385,10 @@ app.get('/g/:token', async (c) => {
             for (const node of nodes) {
                 if (allowed !== 'all' && !allowed.has(node.name)) continue;
                 
-                // 重名处理
                 let name = node.name.trim();
                 let i = 1;
                 while (allNodes.some(n => n.name === name)) name = `${node.name} ${i++}`;
                 node.name = name;
-                
-                // 关键：重新生成链接以应用新名称
                 node.link = generateNodeLink(node);
                 allNodes.push(node);
             }

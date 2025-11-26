@@ -54,21 +54,12 @@ const fetchWithSmartUA = async (url) => {
   return bestRes;
 }
 
-// --- 3. 生成标准链接 (透传优先) ---
+// --- 3. 生成标准链接 (终极透传版) ---
 const generateNodeLink = (node) => {
     try {
         const safe = (s) => encodeURIComponent(s || '');
 
-        if (node.origLink) {
-            try {
-                if (node.type !== 'vmess') {
-                    const u = new URL(node.origLink);
-                    u.hash = safe(node.name);
-                    return u.toString();
-                }
-            } catch(e) {}
-        }
-
+        // 1. VMess: 特殊处理，需解包
         if (node.type === 'vmess') {
             const vmessObj = {
                 v: "2", ps: node.name, add: node.server, port: node.port, id: node.uuid,
@@ -82,7 +73,26 @@ const generateNodeLink = (node) => {
             if (node.flow) vmessObj.flow = node.flow;
             return 'vmess://' + safeBase64Encode(JSON.stringify(vmessObj));
         }
+
+        // 2. 透传所有其他协议
+        if (node.origLink) {
+            try {
+                const u = new URL(node.origLink);
+                u.hash = safe(node.name);
+                return u.toString();
+            } catch(e) {
+                // 兜底：直接字符串替换
+                const hashIndex = node.origLink.lastIndexOf('#');
+                if (hashIndex !== -1) {
+                    return node.origLink.substring(0, hashIndex) + '#' + safe(node.name);
+                }
+                return node.origLink + '#' + safe(node.name);
+            }
+        }
+
+        // 3. 兜底
         if (['vless', 'trojan', 'hysteria2', 'tuic'].includes(node.type)) {
+            // (这里的逻辑实际上不应该被触发，因为 origLink 总是存在)
             let auth = node.uuid || node.password || '';
             let link = `${node.type}://${auth}@${node.server}:${node.port}?`;
             let params = [];
@@ -221,7 +231,7 @@ const parseNodesCommon = (text) => {
                     "skip-cert-verify": params.get('allowInsecure') === '1' || params.get('insecure') === '1',
                     flow: params.get('flow'),
                     "client-fingerprint": params.get('fp'),
-                    origLink: trimLine
+                    origLink: trimLine // 保存原始链接
                 };
                 
                 if (protocol === 'ss') {

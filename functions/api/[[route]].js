@@ -46,7 +46,7 @@ const deepBase64Decode = (str, depth = 0) => {
 }
 const safeStr = (str) => JSON.stringify(String(str || ''))
 
-// --- 核心：智能 Fetch (加强版：禁止缓存) ---
+// --- 核心：智能 Fetch (禁止缓存) ---
 const extractUserInfo = (headers) => {
     let infoStr = null;
     headers.forEach((val, key) => { if (key.toLowerCase().includes('userinfo')) infoStr = val; });
@@ -70,7 +70,6 @@ const fetchWithSmartUA = async (url) => {
     try {
       const controller = new AbortController();
       const id = setTimeout(() => controller.abort(), 10000);
-      // 【关键修改】添加 cache: 'no-store' 防止 Workers 缓存旧订阅内容
       const res = await fetch(url, { 
           headers: { 'User-Agent': ua }, 
           signal: controller.signal,
@@ -97,7 +96,7 @@ const fetchWithSmartUA = async (url) => {
   return bestRes;
 }
 
-// --- 核心：Clash 节点生成 ---
+// --- 核心：Clash 节点生成 (Clash 必须重组 YAML，无法简单透传链接) ---
 const fmtClashProxy = (node) => {
     let lines = [];
     lines.push(`  - name: ${safeStr(node.name)}`);
@@ -161,22 +160,12 @@ const fmtClashProxy = (node) => {
     return lines.join('\n');
 }
 
-// --- 核心：生成器 (透传优先) ---
+// --- 核心：链接生成器 (V2RayN 专用 - 终极透传版) ---
 const generateNodeLink = (node) => {
     try {
         const safe = (s) => encodeURIComponent(s || '');
 
-        // 优先使用原始链接 (透传)，只修改 Hash 名称
-        if (node.origLink) {
-            try {
-                if (node.type !== 'vmess') {
-                    const u = new URL(node.origLink);
-                    u.hash = safe(node.name);
-                    return u.toString();
-                }
-            } catch(e) {}
-        }
-
+        // 1. VMess: 特殊处理，因为它是 Base64 JSON，必须解包改名再打包
         if (node.type === 'vmess') {
             const vmessObj = {
                 v: "2", ps: node.name, add: node.server, port: node.port, id: node.uuid,
@@ -190,55 +179,31 @@ const generateNodeLink = (node) => {
             if (node.flow) vmessObj.flow = node.flow;
             return 'vmess://' + safeBase64Encode(JSON.stringify(vmessObj));
         }
-        if (['vless', 'trojan', 'hysteria2', 'tuic'].includes(node.type)) {
-            let auth = node.uuid || node.password || '';
-            let link = `${node.type}://${auth}@${node.server}:${node.port}?`;
-            let params = [];
-            if (node.type !== 'hysteria2' && node.type !== 'tuic') params.push(`encryption=none`);
-            if (node.tls) params.push(`security=tls`);
-            else if (node.type === 'vless') params.push(`security=none`);
-            if (node.type === 'trojan' && node.sni) params.push(`sni=${safe(node.sni)}`);
-            if (node.type === 'vless' || node.type === 'trojan') params.push(`type=${node.network || 'tcp'}`);
-            if (node.servername) params.push(`sni=${safe(node.servername)}`);
-            if (node.flow) params.push(`flow=${node.flow}`);
-            if (node['client-fingerprint']) params.push(`fp=${node['client-fingerprint']}`);
-            if (node['skip-cert-verify']) params.push(`allowInsecure=1`);
-            if (node.network === 'ws' && node['ws-opts']) {
-                if (node['ws-opts'].path) params.push(`path=${safe(node['ws-opts'].path)}`);
-                if (node['ws-opts'].headers?.Host) params.push(`host=${safe(node['ws-opts'].headers.Host)}`);
-            }
-            if (node.reality) {
-                params.push(`security=reality`);
-                params.push(`pbk=${safe(node.reality.publicKey)}`);
-                params.push(`sid=${safe(node.reality.shortId)}`);
-            }
-            if (node.type === 'hysteria2') {
-                if (node.sni) params.push(`sni=${safe(node.sni)}`);
-                if (node.obfs) {
-                    params.push(`obfs=${node.obfs}`);
-                    params.push(`obfs-password=${safe(node['obfs-password'])}`);
+
+        // 2. 所有其他协议 (VLESS, Trojan, SS, Hysteria2, Tuic 等)
+        // 直接使用原始链接，只修改 URL Hash (备注名)
+        if (node.origLink) {
+            try {
+                // 尝试构建 URL 对象来修改 hash
+                const u = new URL(node.origLink);
+                u.hash = safe(node.name);
+                return u.toString();
+            } catch(e) {
+                // 如果原始链接格式不标准（例如旧版 SS），尝试简单的字符串替换或直接拼接
+                const hashIndex = node.origLink.lastIndexOf('#');
+                if (hashIndex !== -1) {
+                    return node.origLink.substring(0, hashIndex) + '#' + safe(node.name);
                 }
-            }
-            if (node.type === 'tuic') {
-                if (node.sni) params.push(`sni=${safe(node.sni)}`);
-                if (node['congestion-controller']) params.push(`congestion_control=${node['congestion-controller']}`);
-                if (node['udp-relay-mode']) params.push(`udp_relay_mode=${node['udp-relay-mode']}`);
-                if (node.alpn) params.push(`alpn=${safe(node.alpn[0])}`);
-            }
-            link += params.join('&');
-            link += `#${safe(node.name)}`;
-            return link;
-        }
-        if (node.type === 'ss') {
-            if (node.cipher && node.password) {
-                return `ss://${safeBase64Encode(`${node.cipher}:${node.password}`)}@${node.server}:${node.port}#${safe(node.name)}`;
+                return node.origLink + '#' + safe(node.name);
             }
         }
+
+        // 3. 兜底逻辑 (理论上不应触发，除非解析步骤出错)
         return node.link || '';
     } catch (e) { return ''; }
 }
 
-// --- 核心：解析器 ---
+// --- 核心：解析器 (只负责提取，不负责重组) ---
 const parseYamlProxies = (content) => {
     const nodes = [];
     if (!content) return nodes;
@@ -271,6 +236,7 @@ const parseYamlProxies = (content) => {
             if (node.network === 'ws') {
                 node["ws-opts"] = { path: getVal('path')||'/', headers: { Host: getVal('host')||'' } };
             }
+            // YAML 无法透传链接（因为源头不是链接），必须生成
             node.link = generateNodeLink(node); 
             nodes.push(node);
         }
@@ -297,11 +263,13 @@ const parseNodesCommon = (text) => {
     let nodes = [];
     let decoded = deepBase64Decode(text);
     
+    // YAML 检测
     if (decoded.includes('proxies:') || decoded.includes('Proxy:') || decoded.includes('- name:')) {
         const yamlNodes = parseYamlProxies(decoded);
         if (yamlNodes.length > 0) return yamlNodes;
     }
 
+    // 链接列表处理
     const splitText = decoded.replace(/(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//gi, '\n$1://');
     const lines = splitText.split(/[\r\n]+/);
     
@@ -309,15 +277,21 @@ const parseNodesCommon = (text) => {
         const trimLine = line.trim();
         if (!trimLine || trimLine.length < 10) continue;
         try {
+            // VMess 处理
             if (trimLine.startsWith('vmess://')) {
                 const c = JSON.parse(safeBase64Decode(trimLine.substring(8)));
                 nodes.push({ name: c.ps, type: 'vmess', server: c.add, port: c.port, uuid: c.id, cipher: c.scy||'auto', network: c.net, tls: c.tls==='tls', "ws-opts": c.net==='ws' ? { path: c.path, headers: { Host: c.host } } : undefined, flow: c.flow, link: trimLine, origLink: trimLine });
                 continue;
             }
+            
+            // 通用链接处理 (VLESS, SS, Trojan, Hysteria2, Tuic)
             if (/^(vless|ss|trojan|hysteria2?|tuic):\/\//i.test(trimLine)) {
+                // 为了兼容 Clash 转换，我们仍然解析基本信息，
+                // 但对于 V2RayN 订阅，我们将主要依赖 `origLink`
                 const url = new URL(trimLine);
                 const params = url.searchParams;
                 const protocol = url.protocol.replace(':', '');
+                
                 let node = {
                     name: decodeURIComponent(url.hash.substring(1)),
                     type: protocol === 'hysteria' ? 'hysteria2' : protocol,
@@ -332,9 +306,10 @@ const parseNodesCommon = (text) => {
                     "skip-cert-verify": params.get('allowInsecure') === '1' || params.get('insecure') === '1',
                     flow: params.get('flow'),
                     "client-fingerprint": params.get('fp'),
-                    origLink: trimLine // 保存原始链接
+                    origLink: trimLine // 【核心】保存原始链接字符串
                 };
-                
+
+                // SS 特殊解析 (为了 Clash 兼容性)
                 if (protocol === 'ss') {
                     let userStr = url.username;
                     try { userStr = decodeURIComponent(url.username); } catch(e) {}
@@ -370,6 +345,7 @@ const parseNodesCommon = (text) => {
     }
     
     return nodes.map(n => {
+        // 如果没有 link 属性，则生成。生成时会优先使用 origLink
         if (!n.link) n.link = generateNodeLink(n);
         return n;
     });
@@ -434,6 +410,7 @@ rules:
 
             for(const node of nodes) {
                 if (allowed && !allowed.has(node.name)) continue;
+                // Clash 生成必须依赖解析后的参数，无法透传
                 if (node.type === 'ss' && (!node.cipher || !node.password)) continue;
 
                 let name = node.name.trim();
@@ -451,7 +428,6 @@ rules:
             .replace(/<BIAOSUB_PROXIES>/g, proxiesStr)
             .replace(/<BIAOSUB_GROUP_ALL>/g, groupsStr);
 
-        // 【关键修改】添加禁止缓存头
         return c.text(finalYaml, 200, { 
             'Content-Type': 'text/yaml; charset=utf-8',
             'Content-Disposition': 'attachment; filename="biaosub.yaml"',
@@ -462,7 +438,7 @@ rules:
     } catch(e) { return c.text(e.message, 500) }
 })
 
-// B. Base64 订阅
+// B. Base64 订阅 (V2RayN) - 使用透传逻辑
 app.get('/subscribe/base64', async (c) => {
     try {
         const token = c.req.query('token')
@@ -475,15 +451,18 @@ app.get('/subscribe/base64', async (c) => {
              let content = "";
             if (sub.type === 'node') content = sub.url;
             else { const res = await fetchWithSmartUA(sub.url); if(res && res.ok) content = res.prefetchedText || await res.text(); }
+            
             const nodes = parseNodesCommon(content);
             let params = {}; try { params = sub.params ? JSON.parse(sub.params) : {} } catch(e) {}
             const allowed = params.include?.length ? new Set(params.include) : null;
+            
             for (const node of nodes) {
                 if (allowed && !allowed.has(node.name)) continue;
-                links.push(generateNodeLink(node)); // 透传
+                // generateNodeLink 现在会优先返回 origLink (透传)，只修改 Hash
+                links.push(generateNodeLink(node)); 
             }
         }
-        // 【关键修改】添加禁止缓存头
+        
         return c.text(btoa(encodeURIComponent(links.join('\n')).replace(/%([0-9A-F]{2})/g, (m, p1) => String.fromCharCode('0x' + p1))), 200, {
             'Content-Type': 'text/plain; charset=utf-8',
             'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
@@ -512,6 +491,7 @@ app.post('/check', async (c) => {
         }
 
         const rawNodes = parseNodesCommon(content);
+        // 此处返回给前端预览，generateNodeLink 也会尽量透传，保证预览内容与 V2RayN 订阅一致
         const nodes = rawNodes.map(n => ({ ...n, link: generateNodeLink(n) }));
 
         return c.json({ success: true, data: { valid: true, nodeCount: nodes.length, stats, nodes } });

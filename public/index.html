@@ -311,17 +311,35 @@
                     if (data.success) { items.value = data.data.map(i => ({...i, params: i.params || { include: [], ua: '' }})); nextTick(() => { initSortable(); }) }
                 } catch (e) {} finally { loading.value = false }
             }
-            const initSortable = () => { const el = document.getElementById('sortable-list'); if (el && !sortableInstance) sortableInstance = new Sortable(el, { handle: '.drag-handle', animation: 150, ghostClass: 'sortable-ghost', dragClass: 'sortable-drag', disabled: !canSort.value, onEnd: async (evt) => { const item = items.value.splice(evt.oldIndex, 1)[0]; items.value.splice(evt.newIndex, 0, item); try { await authFetch(`${API_BASE}/sort`, { method: 'POST', body: JSON.stringify({ ids: items.value.map(i => i.id) }) }) } catch(e) {} } }) }
+
+            // 【关键修复】拖拽排序初始化逻辑：先销毁旧实例，再绑定新实例
+            const initSortable = () => { 
+                const el = document.getElementById('sortable-list'); 
+                if (el) {
+                    if (sortableInstance) sortableInstance.destroy(); // 销毁旧实例
+                    sortableInstance = new Sortable(el, { 
+                        handle: '.drag-handle', 
+                        animation: 150, 
+                        ghostClass: 'sortable-ghost', 
+                        dragClass: 'sortable-drag', 
+                        disabled: !canSort.value, 
+                        onEnd: async (evt) => { 
+                            const item = items.value.splice(evt.oldIndex, 1)[0]; 
+                            items.value.splice(evt.newIndex, 0, item); 
+                            try { await authFetch(`${API_BASE}/sort`, { method: 'POST', body: JSON.stringify({ ids: items.value.map(i => i.id) }) }) } catch(e) {} 
+                        } 
+                    })
+                }
+            }
             watch([searchText, filterType], () => { if(sortableInstance) sortableInstance.option("disabled", !canSort.value) })
 
-            // 修复：确保发送数字类型的 status
             const toggleStatus = async (item) => { 
                 const newStatus = item.status === 1 ? 0 : 1;
-                item.status = newStatus; // 乐观更新
+                item.status = newStatus; 
                 try {
                     await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({status: Number(newStatus)}) })
                 } catch(e) {
-                    item.status = item.status === 1 ? 0 : 1; // 失败回滚
+                    item.status = item.status === 1 ? 0 : 1;
                     showToast('状态更新失败', 'error')
                 }
             }

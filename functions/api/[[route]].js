@@ -213,7 +213,9 @@ const generateNodeLink = (node) => {
             return link;
         }
         if (node.type === 'ss') {
-            return `ss://${safeBase64Encode(`${node.cipher}:${node.password}`)}@${node.server}:${node.port}#${safe(node.name)}`;
+            if (node.cipher && node.password) {
+                return `ss://${safeBase64Encode(`${node.cipher}:${node.password}`)}@${node.server}:${node.port}#${safe(node.name)}`;
+            }
         }
         return node.link || '';
     } catch (e) { return ''; }
@@ -315,9 +317,37 @@ const parseNodesCommon = (text) => {
                     flow: params.get('flow'),
                     "client-fingerprint": params.get('fp')
                 };
+                
+                // 修复 SS 逻辑
                 if (protocol === 'ss') {
-                     try { const d = safeBase64Decode(url.username); if (d.includes(':')) { const [m, p] = d.split(':'); node.cipher = m; node.password = p; } else { node.cipher = url.username; node.password = url.password; } } catch(e) { node.cipher = url.username; node.password = url.password; }
+                    let rawUser = url.username; // URL已解码了 %3A
+                    let rawPass = url.password;
+                    
+                    // 尝试解析 Base64 (SIP002)
+                    if (!rawPass && !rawUser.includes(':')) {
+                         try {
+                             const decoded = safeBase64Decode(rawUser);
+                             if (decoded && decoded.includes(':')) {
+                                 const parts = decoded.split(':');
+                                 node.cipher = parts[0];
+                                 node.password = parts.slice(1).join(':');
+                             }
+                         } catch(e) {}
+                    }
+                    
+                    // 如果上面没解析出来，或者本身就是 cipher:pass 结构
+                    if (!node.cipher) {
+                        if (rawUser.includes(':') && !rawPass) {
+                             const parts = rawUser.split(':');
+                             node.cipher = parts[0];
+                             node.password = parts.slice(1).join(':');
+                        } else {
+                             node.cipher = rawUser;
+                             node.password = rawPass;
+                        }
+                    }
                 }
+                
                 if (node.network === 'ws') node['ws-opts'] = { path: params.get('path')||'/', headers: { Host: params.get('host')||node.servername } };
                 if (params.get('security') === 'reality') { node.tls = true; node.reality = { publicKey: params.get('pbk'), shortId: params.get('sid') }; if(!node['client-fingerprint']) node['client-fingerprint']='chrome'; }
                 if (protocol === 'hysteria2') { node.obfs = params.get('obfs'); node['obfs-password'] = params.get('obfs-password'); node.udp = true; }
@@ -382,10 +412,13 @@ rules:
 
         let allNodes = []
         for (const sub of subs) {
+            // 严格状态检查
+            if (Number(sub.status) !== 1) continue;
+
             let content = "";
             if (sub.type === 'node') content = sub.url;
             else {
-                const res = await fetchWithSmartUA(sub.url); // 使用恢复的 SmartUA
+                const res = await fetchWithSmartUA(sub.url);
                 if(res && res.ok) content = res.prefetchedText || await res.text();
             }
             
@@ -425,6 +458,9 @@ app.get('/subscribe/base64', async (c) => {
         const { results: subs } = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1 ORDER BY sort_order ASC, id DESC").all()
         let links = [];
         for (const sub of subs) {
+            // 严格状态检查
+            if (Number(sub.status) !== 1) continue;
+
              let content = "";
             if (sub.type === 'node') content = sub.url;
             else { const res = await fetchWithSmartUA(sub.url); if(res && res.ok) content = res.prefetchedText || await res.text(); }

@@ -145,12 +145,10 @@
         <dialog class="modal" :class="{ 'modal-open': showModal }">
             <div class="modal-box bg-slate-800 border border-slate-700 max-w-2xl">
                 <h3 class="font-bold text-lg text-white mb-4">{{ isEditing ? '编辑' : '添加' }}</h3>
-                
                 <div v-if="!isEditing" class="tabs tabs-boxed bg-slate-900 mb-4">
                     <a class="tab flex-1" :class="{ 'tab-active bg-indigo-600 text-white': activeTab === 'subscription' }" @click="activeTab = 'subscription'; checkResult=null">订阅</a>
                     <a class="tab flex-1" :class="{ 'tab-active bg-pink-600 text-white': activeTab === 'node' }" @click="activeTab = 'node'; checkResult=null">自建节点</a>
                 </div>
-
                 <div class="flex flex-col gap-4 mb-6">
                     <input type="text" v-model="form.name" placeholder="备注名称" class="input input-bordered w-full bg-slate-900 border-slate-600 focus:border-primary" />
                     <div class="relative">
@@ -166,7 +164,6 @@
                         </div>
                     </div>
                 </div>
-                
                 <div class="collapse collapse-arrow bg-slate-900 border border-slate-700 rounded-box mb-4">
                     <input type="checkbox" /> 
                     <div class="collapse-title text-sm font-medium text-slate-300 flex justify-between items-center pr-10">
@@ -190,7 +187,6 @@
                         <div v-else class="text-center py-4"><button @click="loadNodesForSelection" class="btn btn-sm btn-outline btn-accent"><i class="fa-solid fa-cloud-arrow-down"></i> 加载节点列表</button></div>
                     </div>
                 </div>
-
                 <div class="modal-action"><button class="btn btn-ghost" @click="showModal=false">取消</button><button class="btn btn-primary" @click="saveItem" :disabled="submitting">保存</button></div>
             </div>
         </dialog>
@@ -198,26 +194,19 @@
         <dialog class="modal" :class="{ 'modal-open': showTemplateModal }">
             <div class="modal-box bg-slate-800 border border-slate-700 w-11/12 max-w-5xl h-5/6 flex flex-col p-0 overflow-hidden">
                 <div class="flex justify-between items-center p-4 bg-slate-900 border-b border-slate-700">
-                    <h3 class="font-bold text-lg text-white flex items-center gap-2">
-                        <i class="fa-solid fa-file-code text-primary"></i> 全局 Clash 配置 (YAML)
-                    </h3>
+                    <h3 class="font-bold text-lg text-white flex items-center gap-2"><i class="fa-solid fa-file-code text-primary"></i> 全局 Clash 配置 (YAML)</h3>
                     <button class="btn btn-sm btn-circle btn-ghost ml-4" @click="showTemplateModal=false">✕</button>
                 </div>
                 <div class="flex-1 overflow-hidden relative h-full flex flex-col">
                     <div class="bg-slate-800 p-2 text-xs text-slate-500 flex justify-between items-center border-b border-slate-700">
-                        <span>后端会自动将转换好的节点插入到: <code class="text-warning">&lt;BIAOSUB_PROXIES&gt;</code> (节点列表) 和 <code class="text-warning">&lt;BIAOSUB_GROUP_ALL&gt;</code> (所有节点名称)</span>
-                        <button @click="resetTemplateToDefault" class="btn btn-xs btn-warning btn-outline">
-                            <i class="fa-solid fa-rotate-left"></i> 重置默认
-                        </button>
+                        <span>插入点: <code class="text-warning">&lt;BIAOSUB_PROXIES&gt;</code> & <code class="text-warning">&lt;BIAOSUB_GROUP_ALL&gt;</code></span>
+                        <button @click="resetTemplateToDefault" class="btn btn-xs btn-warning btn-outline"><i class="fa-solid fa-rotate-left"></i> 重置默认</button>
                     </div>
                     <textarea v-model="templateContent" class="code-editor w-full h-full bg-[#1e1e1e] text-slate-300 p-4 outline-none resize-none text-sm leading-6" spellcheck="false"></textarea>
                 </div>
                 <div class="p-4 bg-slate-900 border-t border-slate-700 flex justify-end gap-2">
                     <button class="btn btn-ghost" @click="showTemplateModal=false">关闭</button>
-                    <button class="btn btn-primary" @click="saveTemplate" :disabled="templateSaving">
-                        <span v-if="templateSaving" class="loading loading-spinner loading-xs"></span>
-                        保存配置
-                    </button>
+                    <button class="btn btn-primary" @click="saveTemplate" :disabled="templateSaving"><span v-if="templateSaving" class="loading loading-spinner loading-xs"></span> 保存配置</button>
                 </div>
             </div>
         </dialog>
@@ -228,11 +217,8 @@
                 <div class="max-h-96 overflow-y-auto bg-slate-900 rounded p-2">
                     <div v-for="(node, idx) in previewModal.nodes" :key="idx" class="text-xs text-slate-400 border-b border-slate-700/50 py-2 last:border-none group hover:bg-slate-800 px-2 transition-colors">
                         <div class="flex justify-between items-center">
-                            <div class="truncate flex-1 pr-2">
-                                <span class="text-white font-bold">{{ node.name }}</span>
-                                <span class="badge badge-xs badge-outline ml-2">{{ node.type }}</span>
-                            </div>
-                            <button @click="copyToClip(node.link)" class="btn btn-square btn-xs btn-ghost text-accent" title="复制此节点"><i class="fa-regular fa-copy"></i></button>
+                            <div class="truncate flex-1 pr-2"><span class="text-white font-bold">{{ node.name }}</span><span class="badge badge-xs badge-outline ml-2">{{ node.type }}</span></div>
+                            <button @click="copyToClip(node.link)" class="btn btn-square btn-xs btn-ghost text-accent"><i class="fa-regular fa-copy"></i></button>
                         </div>
                         <div class="font-mono mt-1 truncate opacity-50">{{ node.link }}</div>
                     </div>
@@ -267,6 +253,7 @@
             </div>
             <form method="dialog" class="modal-backdrop"><button @click="qrModal.show=false">close</button></form>
         </dialog>
+
         <div v-if="toast.show" class="toast toast-bottom toast-end z-50"><div class="alert shadow-lg text-white" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'"><span>{{ toast.message }}</span></div></div>
     </div>
 </div>
@@ -274,42 +261,7 @@
 <script>
     const { createApp, ref, computed, nextTick, watch } = Vue
     const API_BASE = '/api'
-
-    // 默认模板 (你给的标准)
-    const DEFAULT_TEMPLATE = `port: 7890
-socks-port: 7891
-mixed-port: 7892
-allow-lan: false
-bind-address: '*'
-mode: rule
-log-level: info
-ipv6: true
-external-controller: '127.0.0.1:9090'
-dns:
-  enable: true
-  ipv6: false
-  enhanced-mode: fake-ip
-  fake-ip-range: 198.18.0.1/16
-  nameserver: ['223.5.5.5', '119.29.29.29']
-  fallback: ['https://1.0.0.1/dns-query', 'https://9.9.9.10/dns-query']
-proxies:
-<BIAOSUB_PROXIES>
-proxy-groups:
-  - name: 🚀 节点选择
-    type: select
-    proxies:
-      - ♻️ 自动选择
-<BIAOSUB_GROUP_ALL>
-  - name: ♻️ 自动选择
-    type: url-test
-    url: http://www.gstatic.com/generate_204
-    interval: 300
-    tolerance: 50
-    proxies:
-<BIAOSUB_GROUP_ALL>
-rules:
-  - GEOIP,CN,DIRECT
-  - MATCH,🚀 节点选择`;
+    const DEFAULT_TEMPLATE = `port: 7890\nsocks-port: 7891\nmixed-port: 7892\nallow-lan: false\nbind-address: '*'\nmode: rule\nlog-level: info\nipv6: true\nexternal-controller: '127.0.0.1:9090'\ndns:\n  enable: true\n  ipv6: false\n  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\n  nameserver: ['223.5.5.5', '119.29.29.29']\n  fallback: ['https://1.0.0.1/dns-query', 'https://9.9.9.10/dns-query']\nproxies:\n<BIAOSUB_PROXIES>\nproxy-groups:\n  - name: 🚀 节点选择\n    type: select\n    proxies:\n      - ♻️ 自动选择\n<BIAOSUB_GROUP_ALL>\n  - name: ♻️ 自动选择\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies:\n<BIAOSUB_GROUP_ALL>\nrules:\n  - GEOIP,CN,DIRECT\n  - MATCH,🚀 节点选择`;
 
     createApp({
         setup() {
@@ -323,35 +275,22 @@ rules:
             const qrModal = ref({ show: false, title: '', url: '' })
             const checking = ref(false); const checkResult = ref(null); let sortableInstance = null
             const refreshingAll = ref(false); const previewModal = ref({ show: false, nodes: [] }); 
-            
-            // Template
-            const showTemplateModal = ref(false)
-            const templateContent = ref('')
-            const templateSaving = ref(false)
+            const showTemplateModal = ref(false); const templateContent = ref(''); const templateSaving = ref(false)
             
             const filteredItems = computed(() => items.value.filter(i => {
                 if (filterType.value !== 'all' && i.type !== filterType.value) return false
                 if (searchText.value && !i.name.toLowerCase().includes(searchText.value.toLowerCase())) return false
                 return true
             }))
-
             const subCount = computed(() => items.value.filter(i => i.type === 'subscription').length)
             const nodeCount = computed(() => items.value.filter(i => i.type === 'node').length)
             const canSort = computed(() => searchText.value === '' && filterType.value === 'all')
-
+            
             const getFlagEmoji = (code) => code ? String.fromCodePoint(...code.toUpperCase().split('').map(c => 127397 + c.charCodeAt(0))) : '🌐'
             const isExpired = (ts) => ts ? Date.now() > ts * 1000 : false
-            
             const getAlertClass = (item) => item.status === 0 ? 'opacity-50 grayscale' : ''
             const getProgressClass = (p) => p > 90 ? 'progress-error' : (p > 75 ? 'progress-warning' : 'progress-primary')
-            const getTextColorClass = (p) => p > 90 ? 'text-error' : (p > 75 ? 'text-warning' : 'text-success')
-
-            const copyLink = (t) => { 
-               const token = localStorage.getItem('biaosub_token') || '';
-               let path = '/api/subscribe/clash';
-               if (t === 'base64') path = '/api/subscribe/base64';
-               copyToClip(`${window.location.origin}${path}?token=${token}`);
-            }
+            const copyLink = (t) => { const token = localStorage.getItem('biaosub_token') || ''; let path = t === 'base64' ? '/api/subscribe/base64' : '/api/subscribe/clash'; copyToClip(`${window.location.origin}${path}?token=${token}`); }
 
             const authFetch = async (url, options = {}) => {
                 const token = localStorage.getItem('biaosub_token')
@@ -361,183 +300,55 @@ rules:
                 return res
             }
 
-            const handleLogin = async () => { 
-                if (!loginPassword.value) return; 
-                loginLoading.value = true; 
-                try { 
-                    const res = await fetch(`${API_BASE}/login`, { method: 'POST', body: JSON.stringify({password: loginPassword.value}) }); 
-                    if ((await res.json()).success) { 
-                        localStorage.setItem('biaosub_token', loginPassword.value); 
-                        isLoggedIn.value = true; 
-                        initData(); 
-                    } else loginError.value = '密码错误'
-                } catch (e) { loginError.value = '网络错误' } finally { loginLoading.value = false } 
-            }
-
+            const handleLogin = async () => { if (!loginPassword.value) return; loginLoading.value = true; try { const res = await fetch(`${API_BASE}/login`, { method: 'POST', body: JSON.stringify({password: loginPassword.value}) }); if ((await res.json()).success) { localStorage.setItem('biaosub_token', loginPassword.value); isLoggedIn.value = true; initData(); } else loginError.value = '密码错误' } catch (e) { loginError.value = '网络错误' } finally { loginLoading.value = false } }
             const logout = () => { localStorage.removeItem('biaosub_token'); isLoggedIn.value = false; items.value = [] }
-            const checkLoginStatus = () => { if (localStorage.getItem('biaosub_token')) { isLoggedIn.value = true; initData() } }
             const initData = () => { fetchItems(); }
-            
             const fetchItems = async () => {
                 loading.value = true
                 try {
                     const res = await authFetch(`${API_BASE}/subs`)
                     const data = await res.json()
-                    if (data.success) { 
-                        items.value = data.data.map(i => {
-                            if (!i.params) i.params = {}
-                            if (!i.params.include) i.params.include = []
-                            if (!i.params.ua) i.params.ua = ''
-                            return i
-                        }); 
-                        nextTick(() => { initSortable(); }) 
-                    }
+                    if (data.success) { items.value = data.data.map(i => ({...i, params: i.params || { include: [], ua: '' }})); nextTick(() => { initSortable(); }) }
                 } catch (e) {} finally { loading.value = false }
             }
-
-            const formatTime = (ts) => {
-                if (!ts) return '从未'
-                try { return new Date(ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) } catch(e) { return '错误' }
-            }
-
-            const initSortable = () => {
-                const el = document.getElementById('sortable-list')
-                if (el && !sortableInstance) sortableInstance = new Sortable(el, {
-                    handle: '.drag-handle', animation: 150, ghostClass: 'sortable-ghost', dragClass: 'sortable-drag', disabled: !canSort.value,
-                    onEnd: async (evt) => {
-                        const item = items.value.splice(evt.oldIndex, 1)[0]
-                        items.value.splice(evt.newIndex, 0, item)
-                        try { await authFetch(`${API_BASE}/sort`, { method: 'POST', body: JSON.stringify({ ids: items.value.map(i => i.id) }) }) } catch(e) {}
-                    }
-                })
-            }
+            const initSortable = () => { const el = document.getElementById('sortable-list'); if (el && !sortableInstance) sortableInstance = new Sortable(el, { handle: '.drag-handle', animation: 150, ghostClass: 'sortable-ghost', dragClass: 'sortable-drag', disabled: !canSort.value, onEnd: async (evt) => { const item = items.value.splice(evt.oldIndex, 1)[0]; items.value.splice(evt.newIndex, 0, item); try { await authFetch(`${API_BASE}/sort`, { method: 'POST', body: JSON.stringify({ ids: items.value.map(i => i.id) }) }) } catch(e) {} } }) }
             watch([searchText, filterType], () => { if(sortableInstance) sortableInstance.option("disabled", !canSort.value) })
 
-            const loadNodesForSelection = async () => {
-                if (!form.value.url) return showToast('请输入内容', 'error')
-                selectionLoading.value = true; selectionNodes.value = []
+            // 修复：确保发送数字类型的 status
+            const toggleStatus = async (item) => { 
+                const newStatus = item.status === 1 ? 0 : 1;
+                item.status = newStatus; // 乐观更新
                 try {
-                    const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: form.value.url, type: activeTab.value, needNodes: true, ua: form.value.params.ua }) })
-                    const data = await res.json()
-                    if (data.success && data.data.nodes) { selectionNodes.value = data.data.nodes } else { showToast('加载失败', 'error') }
-                } catch (e) { showToast('网络错误', 'error') } finally { selectionLoading.value = false }
+                    await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({status: Number(newStatus)}) })
+                } catch(e) {
+                    item.status = item.status === 1 ? 0 : 1; // 失败回滚
+                    showToast('状态更新失败', 'error')
+                }
             }
+
+            const loadNodesForSelection = async () => { if (!form.value.url) return showToast('请输入内容', 'error'); selectionLoading.value = true; selectionNodes.value = []; try { const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: form.value.url, type: activeTab.value, ua: form.value.params.ua }) }); const data = await res.json(); if (data.success && data.data.nodes) { selectionNodes.value = data.data.nodes } else { showToast('加载失败', 'error') } } catch (e) { showToast('网络错误', 'error') } finally { selectionLoading.value = false } }
             const selectAllNodes = () => { form.value.params.include = selectionNodes.value.map(n => n.name) }
-
-            const previewNodes = async (item) => {
-                previewModal.value = { show: true, nodes: [] }
-                try {
-                    const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type, needNodes: true, ua: item.params ? item.params.ua : '' }) })
-                    const data = await res.json()
-                    if (data.success && data.data.nodes) { previewModal.value.nodes = data.data.nodes } else { showToast('失败', 'error') }
-                } catch (e) { showToast('网络错误', 'error') }
-            }
-
+            const previewNodes = async (item) => { previewModal.value = { show: true, nodes: [] }; try { const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type, ua: item.params ? item.params.ua : '' }) }); const data = await res.json(); if (data.success && data.data.nodes) { previewModal.value.nodes = data.data.nodes } else { showToast('失败', 'error') } } catch (e) { showToast('网络错误', 'error') } }
             const copyAllNodes = () => { copyToClip(previewModal.value.nodes.map(n => n.link).join('\n')) }
             
-            const refreshAll = async () => {
-                if (refreshingAll.value) return
-                if (!confirm('更新所有订阅?')) return
-                refreshingAll.value = true
-                const subs = items.value.filter(i => i.type === 'subscription')
-                for (const item of subs) {
-                    try {
-                        item.refreshing = true
-                        const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type, ua: item.params ? item.params.ua : '' }) })
-                        const data = await res.json()
-                        if (data.success) { item.info = data.data; item.updated_at = new Date().toISOString(); await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({ info: data.data }) }) }
-                    } catch (e) {} finally { item.refreshing = false }
-                }
-                refreshingAll.value = false; showToast(`更新完成`)
-            }
-
+            const refreshAll = async () => { if (refreshingAll.value) return; if (!confirm('更新所有订阅?')) return; refreshingAll.value = true; const subs = items.value.filter(i => i.type === 'subscription'); for (const item of subs) { try { item.refreshing = true; const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type, ua: item.params ? item.params.ua : '' }) }); const data = await res.json(); if (data.success) { item.info = data.data; item.updated_at = new Date().toISOString(); await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({ info: data.data }) }) } } catch (e) {} finally { item.refreshing = false } } refreshingAll.value = false; showToast(`更新完成`) }
             const fetchSettings = async () => { try { const res = await authFetch(`${API_BASE}/settings`); const data = await res.json(); if (data.success && data.data) { settings.value = data.data; settingsForm.value = { ...data.data } } } catch (e) {} }
             const saveSettings = async () => { submitting.value=true; try { await authFetch(`${API_BASE}/settings`, { method: 'POST', body: JSON.stringify(settingsForm.value) }); showToast('已保存'); settings.value = { ...settingsForm.value }; showSettingsModal.value = false } catch(e){} finally{submitting.value=false} }
-            
             const checkUrl = async () => { if (!form.value.url) return; checking.value = true; checkResult.value = null; try { const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: form.value.url, type: activeTab.value, ua: form.value.params.ua }) }); const data = await res.json(); if (data.success) { checkResult.value = { success: true, message: '成功', ...data.data } } else { checkResult.value = { success: false, message: data.error || '失败' } } } catch (e) { checkResult.value = { success: false, message: '错误' } } finally { checking.value = false } }
             const refreshItem = async (item) => { item.refreshing = true; try { const res = await authFetch(`${API_BASE}/check`, { method: 'POST', body: JSON.stringify({ url: item.url, type: item.type, ua: item.params ? item.params.ua : '' }) }); const data = await res.json(); if (data.success) { item.info = data.data; item.updated_at = new Date().toISOString(); await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({ info: data.data }) }); showToast('刷新成功') } else { showToast('刷新失败', 'error') } } catch (e) {} finally { item.refreshing = false } }
-            
-            const saveItem = async () => { 
-                if (!form.value.name || !form.value.url) return showToast('请填写完整', 'error'); 
-                submitting.value = true; 
-                try { 
-                    const url = isEditing.value ? `${API_BASE}/subs/${currentId.value}` : `${API_BASE}/subs`; 
-                    const method = isEditing.value ? 'PUT' : 'POST'; 
-                    const info = checkResult.value && checkResult.value.success ? { stats: checkResult.value.stats, nodeCount: checkResult.value.nodeCount, location: checkResult.value.location } : null; 
-                    const payload = { name: form.value.name, url: form.value.url, type: activeTab.value, info: info, params: form.value.params }; 
-                    if ((await (await authFetch(url, { method, body: JSON.stringify(payload) })).json()).success) { showToast('保存成功'); fetchItems(); showModal.value=false; } 
-                } catch (e) { showToast('保存失败', 'error') } finally { submitting.value = false } 
-            }
-            
-            const cloneItem = (item) => {
-                const cloned = JSON.parse(JSON.stringify(item))
-                cloned.id = null; cloned.name = cloned.name + ' (副本)'; form.value = cloned; activeTab.value = cloned.type; isEditing.value = false; checkResult.value = null; selectionNodes.value = []
-                showModal.value = true
-                if (cloned.params && cloned.params.include && cloned.params.include.length > 0) { loadNodesForSelection() }
-            }
-
+            const saveItem = async () => { if (!form.value.name || !form.value.url) return showToast('请填写完整', 'error'); submitting.value = true; try { const url = isEditing.value ? `${API_BASE}/subs/${currentId.value}` : `${API_BASE}/subs`; const method = isEditing.value ? 'PUT' : 'POST'; const info = checkResult.value && checkResult.value.success ? { stats: checkResult.value.stats, nodeCount: checkResult.value.nodeCount } : null; const payload = { name: form.value.name, url: form.value.url, type: activeTab.value, info: info, params: form.value.params }; if ((await (await authFetch(url, { method, body: JSON.stringify(payload) })).json()).success) { showToast('保存成功'); fetchItems(); showModal.value=false; } } catch (e) { showToast('保存失败', 'error') } finally { submitting.value = false } }
             const deleteItem = async (id) => { if(confirm('确认删除?')) { await authFetch(`${API_BASE}/subs/${id}`, { method: 'DELETE' }); fetchItems(); } }
-            const toggleStatus = async (item) => { item.status = item.status === 1 ? 0 : 1; await authFetch(`${API_BASE}/subs/${item.id}`, { method: 'PUT', body: JSON.stringify({status: item.status}) }) }
             const copyToClip = (text) => navigator.clipboard.writeText(text).then(() => showToast('已复制'))
             const showQr = async (item) => { qrModal.value = { show: true, title: item.name, url: item.url }; await nextTick(); setTimeout(() => { const c = document.getElementById('qr-canvas'); if(c) new QRious({ element: c, value: item.url, size: 200, level: 'H' }) }, 100) }
             const showToast = (msg, type = 'success') => { toast.value = { show: true, message: msg, type }; setTimeout(() => toast.value.show = false, 3000) }
-            
-            const openModal = (item) => { 
-                checkResult.value=null; selectionNodes.value = []; 
-                if(item) { 
-                    form.value=JSON.parse(JSON.stringify(item)); 
-                    if (!form.value.params) form.value.params = {}
-                    if (!form.value.params.include) form.value.params.include = []
-                    if (!form.value.params.ua) form.value.params.ua = ''
-                    currentId.value=item.id; activeTab.value=item.type; isEditing.value=true 
-                    if (form.value.params.include.length > 0) { loadNodesForSelection() }
-                } else { 
-                    form.value={name:'',url:'', params: { include: [], ua: '' } }; activeTab.value='subscription'; isEditing.value=false 
-                } 
-                showModal.value=true 
-            }
-
-            const openSettings = () => { settingsForm.value = { ...settings.value }; showSettingsModal.value = true }
+            const openModal = (item) => { checkResult.value=null; selectionNodes.value = []; if(item) { form.value=JSON.parse(JSON.stringify(item)); form.value.params = form.value.params || { include: [], ua: '' }; currentId.value=item.id; activeTab.value=item.type; isEditing.value=true; if (form.value.params.include.length > 0) loadNodesForSelection() } else { form.value={name:'',url:'', params: { include: [], ua: '' } }; activeTab.value='subscription'; isEditing.value=false } showModal.value=true }
             const editItem = (i) => openModal(i)
-            
-            const exportData = () => {
-                const data = { items: items.value, settings: settings.value }
-                const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'})
-                const url = URL.createObjectURL(blob)
-                const a = document.createElement('a'); a.href = url; a.download = 'biaosub_backup.json'; a.click()
-            }
-            const importData = async (e) => {
-                const file = e.target.files[0]; if (!file) return
-                const reader = new FileReader();
-                reader.onload = async (e) => {
-                    try {
-                         const data = JSON.parse(e.target.result);
-                         if (data.items) await authFetch(`${API_BASE}/backup/import`, { method: 'POST', body: JSON.stringify({ items: data.items }) })
-                         if (data.settings) await authFetch(`${API_BASE}/settings`, { method: 'POST', body: JSON.stringify(data.settings) })
-                         showToast('导入成功'); fetchItems()
-                    } catch(e) { showToast('导入失败', 'error') }
-                }; reader.readAsText(file)
-            }
-
-            const openTemplateModal = async () => {
-                showTemplateModal.value = true; templateContent.value = '加载中...'
-                try {
-                    const res = await authFetch(`${API_BASE}/template/default`)
-                    const data = await res.json()
-                    if (data.success) { templateContent.value = data.data || DEFAULT_TEMPLATE } 
-                    else { templateContent.value = DEFAULT_TEMPLATE }
-                } catch (e) { templateContent.value = 'Error' }
-            }
-
+            const openSettings = () => { settingsForm.value = { ...settings.value }; showSettingsModal.value = true }
+            const exportData = () => { const data = { items: items.value, settings: settings.value }; const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'}); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'biaosub_backup.json'; a.click() }
+            const importData = async (e) => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader(); reader.onload = async (e) => { try { const data = JSON.parse(e.target.result); if (data.items) await authFetch(`${API_BASE}/backup/import`, { method: 'POST', body: JSON.stringify({ items: data.items }) }); if (data.settings) await authFetch(`${API_BASE}/settings`, { method: 'POST', body: JSON.stringify(data.settings) }); showToast('导入成功'); fetchItems() } catch(e) { showToast('导入失败', 'error') } }; reader.readAsText(file) }
+            const openTemplateModal = async () => { showTemplateModal.value = true; templateContent.value = '加载中...'; try { const res = await authFetch(`${API_BASE}/template/default`); const data = await res.json(); templateContent.value = data.data || DEFAULT_TEMPLATE } catch (e) { templateContent.value = 'Error' } }
             const resetTemplateToDefault = () => { if(confirm('重置为默认?')) templateContent.value = DEFAULT_TEMPLATE }
-
-            const saveTemplate = async () => {
-                templateSaving.value = true
-                try {
-                    const res = await authFetch(`${API_BASE}/template/default`, { method: 'POST', body: JSON.stringify({ content: templateContent.value }) })
-                    if ((await res.json()).success) { showToast('保存成功'); showTemplateModal.value = false }
-                } catch (e) {} finally { templateSaving.value = false }
-            }
+            const saveTemplate = async () => { templateSaving.value = true; try { const res = await authFetch(`${API_BASE}/template/default`, { method: 'POST', body: JSON.stringify({ content: templateContent.value }) }); if ((await res.json()).success) { showToast('保存成功'); showTemplateModal.value = false } } catch (e) {} finally { templateSaving.value = false } }
 
             if (localStorage.getItem('biaosub_token')) { isLoggedIn.value = true; initData() }
             
@@ -546,10 +357,9 @@ rules:
                 items, filteredItems, loading, submitting, subCount, nodeCount, searchText, filterType,
                 showModal, isEditing, activeTab, form, checkResult, checking, checkUrl, saveItem,
                 deleteItem, openModal, refreshItem, copyLink, showQr, qrModal, toast, copyToClip,
-                getAlertClass, getProgressClass, getTextColorClass, getFlagEmoji, formatTime, isExpired,
-                refreshAll, refreshingAll, previewModal, previewNodes, copyAllNodes,
+                getAlertClass, getProgressClass, isExpired, refreshAll, refreshingAll, previewModal, previewNodes, copyAllNodes,
                 loadNodesForSelection, selectionLoading, selectionNodes, selectAllNodes,
-                cloneItem, openSettings, showSettingsModal, settingsForm, saveSettings, exportData, importData, editItem, canSort,
+                openSettings, showSettingsModal, settingsForm, saveSettings, exportData, importData, editItem, canSort, toggleStatus,
                 showTemplateModal, templateContent, templateSaving, openTemplateModal, resetTemplateToDefault, saveTemplate
             }
         }

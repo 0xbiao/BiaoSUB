@@ -156,10 +156,26 @@ const fmtClashProxy = (node) => {
     return lines.join('\n');
 }
 
-// --- 核心：解析器与生成器 ---
+// --- 核心：生成器 (透传模式) ---
 const generateNodeLink = (node) => {
     try {
         const safe = (s) => encodeURIComponent(s || '');
+
+        // 【关键修复】如果存在原始链接，直接使用原始链接，只修改名称(Hash)
+        // 这样可以完美保留 Reality、AllowInsecure 等复杂参数，避免解析丢失
+        if (node.origLink) {
+            try {
+                // vmess 是 base64 编码的 JSON，不能直接 URL 解析，保持原有逻辑生成
+                if (node.type !== 'vmess') {
+                    const u = new URL(node.origLink);
+                    u.hash = safe(node.name);
+                    return u.toString();
+                }
+            } catch(e) {
+                // 如果原始链接格式怪异导致解析失败，回退到下面的生成逻辑
+            }
+        }
+
         if (node.type === 'vmess') {
             const vmessObj = {
                 v: "2", ps: node.name, add: node.server, port: node.port, id: node.uuid,
@@ -217,11 +233,11 @@ const generateNodeLink = (node) => {
                 return `ss://${safeBase64Encode(`${node.cipher}:${node.password}`)}@${node.server}:${node.port}#${safe(node.name)}`;
             }
         }
-        // 如果无法生成链接，返回空字符串，但保留节点对象以便前端调试（可选），这里遵循原逻辑返回空
         return node.link || '';
     } catch (e) { return ''; }
 }
 
+// --- 核心：解析器 ---
 const parseYamlProxies = (content) => {
     const nodes = [];
     if (!content) return nodes;
@@ -254,7 +270,8 @@ const parseYamlProxies = (content) => {
             if (node.network === 'ws') {
                 node["ws-opts"] = { path: getVal('path')||'/', headers: { Host: getVal('host')||'' } };
             }
-            node.link = generateNodeLink(node);
+            // YAML 无法保留 origLink，因为源本身就是 YAML 对象
+            node.link = generateNodeLink(node); 
             nodes.push(node);
         }
     }
@@ -280,13 +297,11 @@ const parseNodesCommon = (text) => {
     let nodes = [];
     let decoded = deepBase64Decode(text);
     
-    // 1. YAML 检测
     if (decoded.includes('proxies:') || decoded.includes('Proxy:') || decoded.includes('- name:')) {
         const yamlNodes = parseYamlProxies(decoded);
         if (yamlNodes.length > 0) return yamlNodes;
     }
 
-    // 2. 通用链接处理
     const splitText = decoded.replace(/(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//gi, '\n$1://');
     const lines = splitText.split(/[\r\n]+/);
     
@@ -296,7 +311,7 @@ const parseNodesCommon = (text) => {
         try {
             if (trimLine.startsWith('vmess://')) {
                 const c = JSON.parse(safeBase64Decode(trimLine.substring(8)));
-                nodes.push({ name: c.ps, type: 'vmess', server: c.add, port: c.port, uuid: c.id, cipher: c.scy||'auto', network: c.net, tls: c.tls==='tls', "ws-opts": c.net==='ws' ? { path: c.path, headers: { Host: c.host } } : undefined, flow: c.flow, link: trimLine });
+                nodes.push({ name: c.ps, type: 'vmess', server: c.add, port: c.port, uuid: c.id, cipher: c.scy||'auto', network: c.net, tls: c.tls==='tls', "ws-opts": c.net==='ws' ? { path: c.path, headers: { Host: c.host } } : undefined, flow: c.flow, link: trimLine, origLink: trimLine });
                 continue;
             }
             if (/^(vless|ss|trojan|hysteria2?|tuic):\/\//i.test(trimLine)) {
@@ -314,15 +329,13 @@ const parseNodesCommon = (text) => {
                     network: params.get('type') || 'tcp',
                     sni: params.get('sni'),
                     servername: params.get('sni') || params.get('host'),
-                    "skip-cert-verify": params.get('allowInsecure') === '1',
+                    "skip-cert-verify": params.get('allowInsecure') === '1' || params.get('insecure') === '1', // 增强识别
                     flow: params.get('flow'),
-                    "client-fingerprint": params.get('fp')
+                    "client-fingerprint": params.get('fp'),
+                    origLink: trimLine // 【保存原始链接】
                 };
                 
-                // --- 修复 SS 逻辑 (针对复杂加密算法和URL编码) ---
                 if (protocol === 'ss') {
-                    // 1. 尝试直接从 username 获取 (ss://method:pass@...)
-                    // Cloudflare 某些环境下 URL 解析可能不会自动解码所有字符，所以强制解码一次
                     let userStr = url.username;
                     try { userStr = decodeURIComponent(url.username); } catch(e) {}
                     
@@ -331,9 +344,8 @@ const parseNodesCommon = (text) => {
                         node.cipher = parts[0];
                         node.password = parts.slice(1).join(':');
                     } else {
-                        // 2. 尝试 Base64 解码 (SIP002: ss://base64(method:pass)@...)
                         try {
-                            const decoded = safeBase64Decode(url.username); // 这里传入原始 username
+                            const decoded = safeBase64Decode(url.username);
                             if (decoded && decoded.includes(':')) {
                                 const parts = decoded.split(':');
                                 node.cipher = parts[0];
@@ -341,14 +353,11 @@ const parseNodesCommon = (text) => {
                             }
                         } catch(e) {}
                     }
-                    
-                    // 3. 兼容旧格式 (ss://method:pass@...) 如果 URL 对象把密码解析到了 password 字段
                     if (!node.cipher && url.password) {
                         node.cipher = decodeURIComponent(url.username);
                         node.password = decodeURIComponent(url.password);
                     }
                 }
-                // ---------------------------------------------------
                 
                 if (node.network === 'ws') node['ws-opts'] = { path: params.get('path')||'/', headers: { Host: params.get('host')||node.servername } };
                 if (params.get('security') === 'reality') { node.tls = true; node.reality = { publicKey: params.get('pbk'), shortId: params.get('sid') }; if(!node['client-fingerprint']) node['client-fingerprint']='chrome'; }
@@ -411,7 +420,6 @@ rules:
 
         let allNodes = []
         for (const sub of subs) {
-            // 严格过滤：再次确认状态
             if (Number(sub.status) !== 1) continue;
 
             let content = "";
@@ -427,7 +435,6 @@ rules:
 
             for(const node of nodes) {
                 if (allowed && !allowed.has(node.name)) continue;
-                // 确保 SS 节点有 cipher 和 password，否则 Clash 会报错
                 if (node.type === 'ss' && (!node.cipher || !node.password)) continue;
 
                 let name = node.name.trim();
@@ -460,7 +467,6 @@ app.get('/subscribe/base64', async (c) => {
         const { results: subs } = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1 ORDER BY sort_order ASC, id DESC").all()
         let links = [];
         for (const sub of subs) {
-            // 严格过滤：再次确认状态
             if (Number(sub.status) !== 1) continue;
 
              let content = "";
@@ -471,7 +477,7 @@ app.get('/subscribe/base64', async (c) => {
             const allowed = params.include?.length ? new Set(params.include) : null;
             for (const node of nodes) {
                 if (allowed && !allowed.has(node.name)) continue;
-                links.push(generateNodeLink(node));
+                links.push(generateNodeLink(node)); // 这里会触发优先使用 origLink 的逻辑
             }
         }
         return c.text(btoa(encodeURIComponent(links.join('\n')).replace(/%([0-9A-F]{2})/g, (m, p1) => String.fromCharCode('0x' + p1))))
@@ -519,28 +525,19 @@ app.post('/subs', async (c) => {
     return c.json({success:true}) 
 })
 
-// --- 修复 PUT：更安全的更新逻辑，防止 0 被忽略 ---
 app.put('/subs/:id', async (c) => { 
     const b = await c.req.json(); 
     const id = c.req.param('id');
-    
-    // 构建 SQL
     let parts = ["updated_at=CURRENT_TIMESTAMP"];
     let args = [];
-    
     if (b.name !== undefined) { parts.push("name=?"); args.push(b.name); }
     if (b.url !== undefined) { parts.push("url=?"); args.push(b.url); }
     if (b.type !== undefined) { parts.push("type=?"); args.push(b.type); }
-    
-    // 显式处理 status，确保 0 被正确更新
     if (b.status !== undefined) { parts.push("status=?"); args.push(parseInt(b.status)); }
-    
     if (b.params) { parts.push("params=?"); args.push(JSON.stringify(b.params)); }
     if (b.info) { parts.push("info=?"); args.push(JSON.stringify(b.info)); }
-    
     const query = `UPDATE subscriptions SET ${parts.join(', ')} WHERE id=?`;
     args.push(id);
-    
     await c.env.DB.prepare(query).bind(...args).run(); 
     return c.json({success:true}) 
 })

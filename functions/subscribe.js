@@ -50,10 +50,22 @@ const fetchWithSmartUA = async (url) => {
   return bestRes;
 }
 
-// --- 3. 生成标准链接 ---
+// --- 3. 生成标准链接 (透传优先) ---
 const generateNodeLink = (node) => {
     try {
         const safe = (s) => encodeURIComponent(s || '');
+
+        // 【透传优先逻辑】
+        if (node.origLink) {
+            try {
+                if (node.type !== 'vmess') {
+                    const u = new URL(node.origLink);
+                    u.hash = safe(node.name);
+                    return u.toString();
+                }
+            } catch(e) {}
+        }
+
         if (node.type === 'vmess') {
             const vmessObj = {
                 v: "2", ps: node.name, add: node.server, port: node.port, id: node.uuid,
@@ -185,7 +197,7 @@ const parseNodesCommon = (text) => {
         try {
             if (trimLine.startsWith('vmess://')) {
                 const c = JSON.parse(safeBase64Decode(trimLine.substring(8)));
-                nodes.push({ name: c.ps, type: 'vmess', server: c.add, port: c.port, uuid: c.id, cipher: c.scy||'auto', network: c.net, tls: c.tls==='tls', "ws-opts": c.net==='ws' ? { path: c.path, headers: { Host: c.host } } : undefined, flow: c.flow, link: trimLine });
+                nodes.push({ name: c.ps, type: 'vmess', server: c.add, port: c.port, uuid: c.id, cipher: c.scy||'auto', network: c.net, tls: c.tls==='tls', "ws-opts": c.net==='ws' ? { path: c.path, headers: { Host: c.host } } : undefined, flow: c.flow, link: trimLine, origLink: trimLine });
                 continue;
             }
             if (/^(vless|ss|trojan|hysteria2?|tuic):\/\//i.test(trimLine)) {
@@ -203,12 +215,12 @@ const parseNodesCommon = (text) => {
                     network: params.get('type') || 'tcp',
                     sni: params.get('sni'),
                     servername: params.get('sni') || params.get('host'),
-                    "skip-cert-verify": params.get('allowInsecure') === '1',
+                    "skip-cert-verify": params.get('allowInsecure') === '1' || params.get('insecure') === '1',
                     flow: params.get('flow'),
-                    "client-fingerprint": params.get('fp')
+                    "client-fingerprint": params.get('fp'),
+                    origLink: trimLine
                 };
                 
-                // 修复 SS
                 if (protocol === 'ss') {
                     let userStr = url.username;
                     try { userStr = decodeURIComponent(url.username); } catch(e) {}
@@ -254,7 +266,6 @@ app.get('/', async (c) => {
         const { results } = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1 ORDER BY sort_order ASC, id DESC").all()
         let allLinks = []
         for (const sub of results) {
-            // 严格过滤：再次确认状态
             if (Number(sub.status) !== 1) continue;
 
             let rawContent = "";
@@ -270,7 +281,7 @@ app.get('/', async (c) => {
             const allowed = params.include?.length ? new Set(params.include) : null;
             for (const node of nodes) {
                 if (allowed && !allowed.has(node.name.trim())) continue;
-                allLinks.push(generateNodeLink(node));
+                allLinks.push(generateNodeLink(node)); // 触发透传
             }
         }
         return c.text(btoa(encodeURIComponent(allLinks.join('\n')).replace(/%([0-9A-F]{2})/g, (m, p1) => String.fromCharCode('0x' + p1))))

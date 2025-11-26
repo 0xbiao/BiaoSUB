@@ -46,7 +46,7 @@ const deepBase64Decode = (str, depth = 0) => {
 }
 const safeStr = (str) => JSON.stringify(String(str || ''))
 
-// --- 核心：智能 Fetch (恢复) ---
+// --- 核心：智能 Fetch ---
 const extractUserInfo = (headers) => {
     let infoStr = null;
     headers.forEach((val, key) => { if (key.toLowerCase().includes('userinfo')) infoStr = val; });
@@ -92,7 +92,7 @@ const fetchWithSmartUA = async (url) => {
   return bestRes;
 }
 
-// --- 核心：Clash 节点生成 (严格匹配标准) ---
+// --- 核心：Clash 节点生成 ---
 const fmtClashProxy = (node) => {
     let lines = [];
     lines.push(`  - name: ${safeStr(node.name)}`);
@@ -156,7 +156,7 @@ const fmtClashProxy = (node) => {
     return lines.join('\n');
 }
 
-// --- 核心：解析器 (增强版) ---
+// --- 核心：解析器与生成器 ---
 const generateNodeLink = (node) => {
     try {
         const safe = (s) => encodeURIComponent(s || '');
@@ -217,6 +217,7 @@ const generateNodeLink = (node) => {
                 return `ss://${safeBase64Encode(`${node.cipher}:${node.password}`)}@${node.server}:${node.port}#${safe(node.name)}`;
             }
         }
+        // 如果无法生成链接，返回空字符串，但保留节点对象以便前端调试（可选），这里遵循原逻辑返回空
         return node.link || '';
     } catch (e) { return ''; }
 }
@@ -318,35 +319,36 @@ const parseNodesCommon = (text) => {
                     "client-fingerprint": params.get('fp')
                 };
                 
-                // 修复 SS 逻辑
+                // --- 修复 SS 逻辑 (针对复杂加密算法和URL编码) ---
                 if (protocol === 'ss') {
-                    let rawUser = url.username; // URL已解码了 %3A
-                    let rawPass = url.password;
+                    // 1. 尝试直接从 username 获取 (ss://method:pass@...)
+                    // Cloudflare 某些环境下 URL 解析可能不会自动解码所有字符，所以强制解码一次
+                    let userStr = url.username;
+                    try { userStr = decodeURIComponent(url.username); } catch(e) {}
                     
-                    // 尝试解析 Base64 (SIP002)
-                    if (!rawPass && !rawUser.includes(':')) {
-                         try {
-                             const decoded = safeBase64Decode(rawUser);
-                             if (decoded && decoded.includes(':')) {
-                                 const parts = decoded.split(':');
-                                 node.cipher = parts[0];
-                                 node.password = parts.slice(1).join(':');
-                             }
-                         } catch(e) {}
+                    if (userStr.includes(':')) {
+                        const parts = userStr.split(':');
+                        node.cipher = parts[0];
+                        node.password = parts.slice(1).join(':');
+                    } else {
+                        // 2. 尝试 Base64 解码 (SIP002: ss://base64(method:pass)@...)
+                        try {
+                            const decoded = safeBase64Decode(url.username); // 这里传入原始 username
+                            if (decoded && decoded.includes(':')) {
+                                const parts = decoded.split(':');
+                                node.cipher = parts[0];
+                                node.password = parts.slice(1).join(':');
+                            }
+                        } catch(e) {}
                     }
                     
-                    // 如果上面没解析出来，或者本身就是 cipher:pass 结构
-                    if (!node.cipher) {
-                        if (rawUser.includes(':') && !rawPass) {
-                             const parts = rawUser.split(':');
-                             node.cipher = parts[0];
-                             node.password = parts.slice(1).join(':');
-                        } else {
-                             node.cipher = rawUser;
-                             node.password = rawPass;
-                        }
+                    // 3. 兼容旧格式 (ss://method:pass@...) 如果 URL 对象把密码解析到了 password 字段
+                    if (!node.cipher && url.password) {
+                        node.cipher = decodeURIComponent(url.username);
+                        node.password = decodeURIComponent(url.password);
                     }
                 }
+                // ---------------------------------------------------
                 
                 if (node.network === 'ws') node['ws-opts'] = { path: params.get('path')||'/', headers: { Host: params.get('host')||node.servername } };
                 if (params.get('security') === 'reality') { node.tls = true; node.reality = { publicKey: params.get('pbk'), shortId: params.get('sid') }; if(!node['client-fingerprint']) node['client-fingerprint']='chrome'; }
@@ -367,23 +369,20 @@ const parseNodesCommon = (text) => {
 
 // --- 路由 ---
 
-// A. Clash 订阅 (加载全局模板)
+// A. Clash 订阅
 app.get('/subscribe/clash', async (c) => {
     try {
         const token = c.req.query('token')
         if (token !== c.env.ADMIN_PASSWORD) return c.text('Unauthorized', 401)
         
-        // 1. 获取所有启用订阅
         const { results: subs } = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1 ORDER BY sort_order ASC, id DESC").all()
         
-        // 2. 获取全局模板
         let template = "";
         try {
             const { results: tmpl } = await c.env.DB.prepare("SELECT content FROM templates WHERE is_default = 1 LIMIT 1").all()
             if (tmpl.length > 0) template = tmpl[0].content
         } catch(e) {}
 
-        // 默认最简模板
         if (!template) {
             template = `port: 7890
 socks-port: 7891
@@ -412,7 +411,7 @@ rules:
 
         let allNodes = []
         for (const sub of subs) {
-            // 严格状态检查
+            // 严格过滤：再次确认状态
             if (Number(sub.status) !== 1) continue;
 
             let content = "";
@@ -428,6 +427,9 @@ rules:
 
             for(const node of nodes) {
                 if (allowed && !allowed.has(node.name)) continue;
+                // 确保 SS 节点有 cipher 和 password，否则 Clash 会报错
+                if (node.type === 'ss' && (!node.cipher || !node.password)) continue;
+
                 let name = node.name.trim();
                 let i = 1;
                 while (allNodes.some(n => n.name === name)) name = `${node.name} ${i++}`;
@@ -450,7 +452,7 @@ rules:
     } catch(e) { return c.text(e.message, 500) }
 })
 
-// B. Base64
+// B. Base64 订阅
 app.get('/subscribe/base64', async (c) => {
     try {
         const token = c.req.query('token')
@@ -458,7 +460,7 @@ app.get('/subscribe/base64', async (c) => {
         const { results: subs } = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE status = 1 ORDER BY sort_order ASC, id DESC").all()
         let links = [];
         for (const sub of subs) {
-            // 严格状态检查
+            // 严格过滤：再次确认状态
             if (Number(sub.status) !== 1) continue;
 
              let content = "";
@@ -476,7 +478,7 @@ app.get('/subscribe/base64', async (c) => {
     } catch(e) { return c.text(e.message, 500) }
 })
 
-// C. Check 接口 (恢复：使用 fetchWithSmartUA)
+// C. Check 接口
 app.post('/check', async (c) => {
     const { url, type } = await c.req.json();
     try {
@@ -485,7 +487,6 @@ app.post('/check', async (c) => {
         if (type === 'node') {
             content = url; 
         } else {
-            // 关键修复：使用 SmartUA 重试逻辑
             const res = await fetchWithSmartUA(url);
             if(!res || !res.ok) throw new Error(`Connect Failed`);
             content = res.prefetchedText || await res.text();
@@ -503,9 +504,47 @@ app.post('/check', async (c) => {
 })
 
 // CRUD
-app.get('/subs', async (c) => { const {results} = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all(); return c.json({success:true, data:results.map(i=>{try{i.info=JSON.parse(i.info);i.params=JSON.parse(i.params)}catch(e){}return i})}) })
-app.post('/subs', async (c) => { const b=await c.req.json(); await c.env.DB.prepare("INSERT INTO subscriptions (name,url,type,params,info,sort_order,status) VALUES (?,?,?,?,?,0,1)").bind(b.name,b.url,b.type||'sub',JSON.stringify(b.params||{}),'{}').run(); return c.json({success:true}) })
-app.put('/subs/:id', async (c) => { const b=await c.req.json(); let q="UPDATE subscriptions SET updated_at=CURRENT_TIMESTAMP"; const a=[]; for(const k of ['name','url','status','type'])if(b[k]!==undefined){q+=`, ${k}=?`;a.push(b[k])}; if(b.params){q+=`, params=?`;a.push(JSON.stringify(b.params))}; if(b.info){q+=`, info=?`;a.push(JSON.stringify(b.info))}; q+=" WHERE id=?"; a.push(c.req.param('id')); await c.env.DB.prepare(q).bind(...a).run(); return c.json({success:true}) })
+app.get('/subs', async (c) => { 
+    const {results} = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all(); 
+    return c.json({success:true, data:results.map(i=>{
+        try{i.info=JSON.parse(i.info);i.params=JSON.parse(i.params)}catch(e){}
+        return i
+    })}) 
+})
+
+app.post('/subs', async (c) => { 
+    const b=await c.req.json(); 
+    await c.env.DB.prepare("INSERT INTO subscriptions (name,url,type,params,info,sort_order,status) VALUES (?,?,?,?,?,0,1)")
+    .bind(b.name,b.url,b.type||'sub',JSON.stringify(b.params||{}),'{}').run(); 
+    return c.json({success:true}) 
+})
+
+// --- 修复 PUT：更安全的更新逻辑，防止 0 被忽略 ---
+app.put('/subs/:id', async (c) => { 
+    const b = await c.req.json(); 
+    const id = c.req.param('id');
+    
+    // 构建 SQL
+    let parts = ["updated_at=CURRENT_TIMESTAMP"];
+    let args = [];
+    
+    if (b.name !== undefined) { parts.push("name=?"); args.push(b.name); }
+    if (b.url !== undefined) { parts.push("url=?"); args.push(b.url); }
+    if (b.type !== undefined) { parts.push("type=?"); args.push(b.type); }
+    
+    // 显式处理 status，确保 0 被正确更新
+    if (b.status !== undefined) { parts.push("status=?"); args.push(parseInt(b.status)); }
+    
+    if (b.params) { parts.push("params=?"); args.push(JSON.stringify(b.params)); }
+    if (b.info) { parts.push("info=?"); args.push(JSON.stringify(b.info)); }
+    
+    const query = `UPDATE subscriptions SET ${parts.join(', ')} WHERE id=?`;
+    args.push(id);
+    
+    await c.env.DB.prepare(query).bind(...args).run(); 
+    return c.json({success:true}) 
+})
+
 app.delete('/subs/:id', async (c) => { await c.env.DB.prepare("DELETE FROM subscriptions WHERE id=?").bind(c.req.param('id')).run(); return c.json({success:true}) })
 app.post('/sort', async (c) => { const {ids}=await c.req.json(); const s=c.env.DB.prepare("UPDATE subscriptions SET sort_order=? WHERE id=?"); await c.env.DB.batch(ids.map((id,i)=>s.bind(i,id))); return c.json({success:true}) })
 app.post('/backup/import', async (c) => { const {items}=await c.req.json(); const s=c.env.DB.prepare("INSERT INTO subscriptions (name, url, type, info, params, status, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)"); await c.env.DB.batch(items.map(i=>s.bind(i.name,i.url,i.type||'subscription',JSON.stringify(i.info),JSON.stringify(i.params),i.status??1,i.sort_order??0))); return c.json({success:true}) })

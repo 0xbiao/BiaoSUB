@@ -6,7 +6,6 @@ const app = new Hono().basePath('/api')
 app.use('/*', cors())
 
 // --- 鉴权中间件 ---
-// 注意：/g/ 开头的路由是聚合订阅公开接口，不需要鉴权
 app.use('/*', async (c, next) => {
   const path = c.req.path
   if (path.endsWith('/login') || path.includes('/g/')) return await next()
@@ -22,6 +21,12 @@ const generateToken = () => {
     let result = '';
     for (let i = 0; i < 16; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
     return result;
+}
+
+const formatBytes = (bytes) => {
+  if (!bytes || isNaN(bytes) || bytes === 0) return '0 B'
+  const k = 1024, sizes = ['B', 'KB', 'MB', 'GB', 'TB'], i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
 
 const safeBase64Decode = (str) => {
@@ -47,9 +52,24 @@ const deepBase64Decode = (str, depth = 0) => {
         return decoded;
     } catch (e) { return str; }
 }
-const safeStr = (str) => JSON.stringify(String(str || ''))
 
-// --- 核心：智能 Fetch (禁止缓存) ---
+// --- 核心：智能 Fetch (含流量解析) ---
+const extractUserInfo = (headers) => {
+    let infoStr = null;
+    headers.forEach((val, key) => { if (key.toLowerCase().includes('userinfo')) infoStr = val; });
+    if (!infoStr) return null;
+    const info = {};
+    infoStr.split(';').forEach(part => { const [key, value] = part.trim().split('='); if (key && value) info[key.trim().toLowerCase()] = Number(value); });
+    if (!info.total && !info.upload && !info.download) return null;
+    return {
+        used: formatBytes((info.upload || 0) + (info.download || 0)),
+        total: info.total ? formatBytes(info.total) : '无限制',
+        expire: info.expire ? new Date(info.expire * 1000).toLocaleDateString() : '长期',
+        percent: info.total ? Math.min(100, Math.round(((info.upload || 0) + (info.download || 0)) / info.total * 100)) : 0,
+        raw_total: info.total, raw_used: (info.upload || 0) + (info.download || 0), raw_expire: info.expire
+    };
+}
+
 const fetchWithSmartUA = async (url) => {
   const userAgents = ['ClashMeta/1.0', 'v2rayNG/1.8.5', 'Clash/1.0', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'];
   let bestRes = null;
@@ -60,13 +80,20 @@ const fetchWithSmartUA = async (url) => {
       const res = await fetch(url, { 
           headers: { 'User-Agent': ua }, 
           signal: controller.signal,
-          cache: 'no-store' // 强制不缓存
+          cache: 'no-store' 
       });
       clearTimeout(id);
       if (res.ok) {
         const clone = res.clone();
         const text = await clone.text();
         if (text.includes('<!DOCTYPE html>') || text.includes('<html')) continue;
+        
+        // 提取流量信息
+        const info = extractUserInfo(res.headers);
+        if (info) {
+            // 将流量信息挂载到 response 对象上返回，以便后续处理
+            Object.defineProperty(res, 'trafficInfo', { value: info, writable: true });
+        }
         Object.defineProperty(res, 'prefetchedText', { value: text, writable: true });
         return res;
       }
@@ -109,70 +136,12 @@ const generateNodeLink = (node) => {
     } catch (e) { return ''; }
 }
 
-const fmtClashProxy = (node) => {
-    // Clash 配置生成保持不变，依赖解析结果
-    let lines = [];
-    lines.push(`  - name: ${safeStr(node.name)}`);
-    lines.push(`    type: ${node.type}`);
-    lines.push(`    server: ${safeStr(node.server)}`);
-    lines.push(`    port: ${node.port}`);
-    if (node.uuid) lines.push(`    uuid: ${safeStr(node.uuid)}`);
-    if (node.password) lines.push(`    password: ${safeStr(node.password)}`);
-    if (node.cipher) lines.push(`    cipher: ${node.cipher}`);
-    if (node.udp) lines.push(`    udp: true`);
-    if (node["skip-cert-verify"]) lines.push(`    skip-cert-verify: true`);
-    if (node.tfo) lines.push(`    tfo: true`);
-    if (node.tls) {
-        lines.push(`    tls: true`);
-        if (node.servername) lines.push(`    servername: ${safeStr(node.servername)}`);
-        if (node.alpn && node.alpn.length > 0) lines.push(`    alpn: [${node.alpn.map(a => `"${a}"`).join(', ')}]`);
-        if (node["client-fingerprint"]) lines.push(`    client-fingerprint: ${node["client-fingerprint"]}`);
-    }
-    if (node.reality) {
-        lines.push(`    flow: ${node.flow || 'xtls-rprx-vision'}`);
-        lines.push(`    reality-opts:`);
-        lines.push(`      public-key: ${safeStr(node.reality.publicKey)}`);
-        if (node.reality.shortId) lines.push(`      short-id: ${safeStr(node.reality.shortId)}`);
-    } else if (node.flow) {
-        lines.push(`    flow: ${node.flow}`);
-    }
-    if (node.network) {
-        lines.push(`    network: ${node.network}`);
-        if (node.network === 'ws' && node['ws-opts']) {
-            lines.push(`    ws-opts:`);
-            lines.push(`      path: ${safeStr(node['ws-opts'].path)}`);
-            if (node['ws-opts'].headers?.Host) {
-                lines.push(`      headers:`);
-                lines.push(`        Host: ${safeStr(node['ws-opts'].headers.Host)}`);
-            }
-        }
-        if (node.network === 'grpc' && node['grpc-opts']) {
-            lines.push(`    grpc-opts:`);
-            lines.push(`      grpc-service-name: ${safeStr(node['grpc-opts']['grpc-service-name'])}`);
-        }
-    }
-    if (node.type === 'trojan' && node.sni) lines.push(`    sni: ${safeStr(node.sni)}`);
-    if (node.type === 'hysteria2') {
-        if (node.sni) lines.push(`    sni: ${safeStr(node.sni)}`);
-        if (node.obfs) {
-            lines.push(`    obfs: ${node.obfs}`);
-            lines.push(`    obfs-password: ${safeStr(node['obfs-password'])}`);
-        }
-    }
-    if (node.type === 'tuic') {
-        if (node.sni) lines.push(`    sni: ${safeStr(node.sni)}`);
-        lines.push(`    udp-relay-mode: native`);
-        lines.push(`    congestion-controller: bbr`);
-    }
-    return lines.join('\n');
-}
-
 // --- 核心：解析器 ---
 const parseNodesCommon = (text) => {
     let nodes = [];
     let decoded = deepBase64Decode(text);
     
-    // YAML Parser (Simplified for brevity, logic same as before)
+    // 简单判断是否是 YAML (虽然我们删除了 Clash 生成，但解析还是要兼容)
     if (decoded.includes('proxies:') || decoded.includes('Proxy:') || decoded.includes('- name:')) {
         const lines = decoded.split(/\r?\n/);
         let inProxyBlock = false;
@@ -195,10 +164,12 @@ const parseNodesCommon = (text) => {
         if (nodes.length > 0) return nodes;
     }
 
+    // 通用链接处理
     const splitText = decoded.replace(/(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive|http|https):\/\//gi, '\n$1://');
     const lines = splitText.split(/[\r\n]+/);
     for (const line of lines) {
-        const trimLine = line.trim(); if (!trimLine || trimLine.length < 10) continue;
+        const trimLine = line.trim(); 
+        if (!trimLine || trimLine.length < 10) continue;
         try {
             if (trimLine.startsWith('vmess://')) {
                 const c = JSON.parse(safeBase64Decode(trimLine.substring(8)));
@@ -233,38 +204,35 @@ app.get('/g/:token', async (c) => {
 
         const config = JSON.parse(group.config || '[]'); // 结构: [{ subId: 1, include: 'all' OR ['Node A'] }]
         
-        // 2. 获取全局模板 (仅 Clash 需要)
-        let template = "";
-        if (format === 'clash') {
-            try {
-                const { results: tmpl } = await c.env.DB.prepare("SELECT content FROM templates WHERE is_default = 1 LIMIT 1").all();
-                if (tmpl.length > 0) template = tmpl[0].content;
-            } catch(e) {}
-            if (!template) template = `port: 7890\nsocks-port: 7891\nallow-lan: true\nmode: rule\nlog-level: info\nexternal-controller: '0.0.0.0:9090'\nproxies:\n<BIAOSUB_PROXIES>\nproxy-groups:\n  - name: 🚀 节点选择\n    type: select\n    proxies:\n      - ♻️ 自动选择\n<BIAOSUB_GROUP_ALL>\n  - name: ♻️ 自动选择\n    type: url-test\n    url: http://www.gstatic.com/generate_204\n    interval: 300\n    tolerance: 50\n    proxies:\n<BIAOSUB_GROUP_ALL>\nrules:\n  - MATCH,🚀 节点选择`;
-        }
-
-        // 3. 遍历配置，获取节点
+        // 2. 遍历配置，获取节点
         let allNodes = [];
         for (const item of config) {
             const sub = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE id = ?").bind(item.subId).first();
-            if (!sub) continue;
+            if (!sub) continue; // 如果订阅不存在，跳过
 
             let content = "";
-            if (sub.type === 'node') content = sub.url;
-            else {
+            if (sub.type === 'node') {
+                content = sub.url;
+            } else {
+                // 强制从网络拉取，不使用缓存，确保获取最新节点
                 const res = await fetchWithSmartUA(sub.url);
                 if (res && res.ok) content = res.prefetchedText || await res.text();
             }
-            if (!content) continue;
+            
+            if (!content) continue; // 如果内容为空，跳过
 
             const nodes = parseNodesCommon(content);
-            const allowed = Array.isArray(item.include) ? new Set(item.include) : 'all';
+            // 解析配置中的筛选规则
+            let allowed = 'all';
+            if (item.include && Array.isArray(item.include) && item.include.length > 0) {
+                allowed = new Set(item.include);
+            }
 
             for (const node of nodes) {
-                // 筛选逻辑：如果是 'all' 则全要，否则检查 Set
-                if (allowed !== 'all' && !allowed.has(node.name.trim())) continue;
+                // 筛选逻辑
+                if (allowed !== 'all' && !allowed.has(node.name)) continue;
 
-                // 重名处理
+                // 重名处理 (简单追加序号)
                 let name = node.name.trim();
                 let i = 1;
                 while (allNodes.some(n => n.name === name)) name = `${node.name} ${i++}`;
@@ -274,27 +242,35 @@ app.get('/g/:token', async (c) => {
             }
         }
 
-        // 4. 输出结果
+        // 3. 输出结果
         if (format === 'clash') {
-            const proxiesStr = allNodes.map(node => fmtClashProxy(node)).join('\n');
-            const groupsStr = allNodes.map(node => `      - ${safeStr(node.name)}`).join('\n');
-            const finalYaml = template
-                .replace(/<BIAOSUB_PROXIES>/g, proxiesStr)
-                .replace(/<BIAOSUB_GROUP_ALL>/g, groupsStr);
-            
-            return c.text(finalYaml, 200, { 'Content-Type': 'text/yaml; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Disposition': `attachment; filename="${group.name}.yaml"` });
+            // 暂时移除 Clash 生成逻辑，返回占位符
+            return c.text("# Clash support is temporarily disabled in this version.\n# Please use V2Ray/Base64 subscription.", 200, { 
+                'Content-Type': 'text/plain; charset=utf-8', 
+                'Cache-Control': 'no-store' 
+            });
         } else {
             // Base64 (V2RayN) - 严格透传
             const links = allNodes.map(node => generateNodeLink(node));
-            return c.text(btoa(encodeURIComponent(links.join('\n')).replace(/%([0-9A-F]{2})/g, (m, p1) => String.fromCharCode('0x' + p1))), 200, { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' });
+            return c.text(btoa(encodeURIComponent(links.join('\n')).replace(/%([0-9A-F]{2})/g, (m, p1) => String.fromCharCode('0x' + p1))), 200, { 
+                'Content-Type': 'text/plain; charset=utf-8', 
+                'Cache-Control': 'no-store' 
+            });
         }
 
     } catch(e) { return c.text(e.message, 500); }
 })
 
 // --- 资源池管理 (Subscriptions) ---
-app.get('/subs', async (c) => { const {results} = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all(); return c.json({success:true, data:results}) })
-app.post('/subs', async (c) => { const b=await c.req.json(); await c.env.DB.prepare("INSERT INTO subscriptions (name,url,type,params,info,sort_order,status) VALUES (?,?,?,?,?,0,1)").bind(b.name,b.url,b.type||'sub',JSON.stringify({}),'{}').run(); return c.json({success:true}) }) // 去掉了 params
+app.get('/subs', async (c) => { 
+    const {results} = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all(); 
+    // 解析 info 字段，确保前端能读到流量信息
+    return c.json({success:true, data:results.map(i=>{
+        try { i.info = JSON.parse(i.info); } catch(e) { i.info = {}; }
+        return i;
+    })}) 
+})
+app.post('/subs', async (c) => { const b=await c.req.json(); await c.env.DB.prepare("INSERT INTO subscriptions (name,url,type,params,info,sort_order,status) VALUES (?,?,?,?,?,0,1)").bind(b.name,b.url,b.type||'sub',JSON.stringify({}),'{}').run(); return c.json({success:true}) })
 app.put('/subs/:id', async (c) => { 
     const b = await c.req.json(); const id = c.req.param('id');
     let parts = ["updated_at=CURRENT_TIMESTAMP"]; let args = [];
@@ -321,7 +297,6 @@ app.put('/groups/:id', async (c) => {
     if(b.name!==undefined){parts.push("name=?");args.push(b.name)} 
     if(b.config!==undefined){parts.push("config=?");args.push(JSON.stringify(b.config))}
     if(b.status!==undefined){parts.push("status=?");args.push(parseInt(b.status))}
-    // 刷新 Token 逻辑
     if(b.refresh_token){parts.push("token=?");args.push(generateToken())}
     
     const query = `UPDATE groups SET ${parts.join(', ')} WHERE id=?`; args.push(id);

@@ -46,7 +46,7 @@ const deepBase64Decode = (str, depth = 0) => {
 }
 const safeStr = (str) => JSON.stringify(String(str || ''))
 
-// --- 核心：智能 Fetch ---
+// --- 核心：智能 Fetch (加强版：禁止缓存) ---
 const extractUserInfo = (headers) => {
     let infoStr = null;
     headers.forEach((val, key) => { if (key.toLowerCase().includes('userinfo')) infoStr = val; });
@@ -70,7 +70,12 @@ const fetchWithSmartUA = async (url) => {
     try {
       const controller = new AbortController();
       const id = setTimeout(() => controller.abort(), 10000);
-      const res = await fetch(url, { headers: { 'User-Agent': ua }, signal: controller.signal });
+      // 【关键修改】添加 cache: 'no-store' 防止 Workers 缓存旧订阅内容
+      const res = await fetch(url, { 
+          headers: { 'User-Agent': ua }, 
+          signal: controller.signal,
+          cache: 'no-store' 
+      });
       clearTimeout(id);
       if (res.ok) {
         const clone = res.clone();
@@ -156,24 +161,20 @@ const fmtClashProxy = (node) => {
     return lines.join('\n');
 }
 
-// --- 核心：生成器 (透传模式) ---
+// --- 核心：生成器 (透传优先) ---
 const generateNodeLink = (node) => {
     try {
         const safe = (s) => encodeURIComponent(s || '');
 
-        // 【关键修复】如果存在原始链接，直接使用原始链接，只修改名称(Hash)
-        // 这样可以完美保留 Reality、AllowInsecure 等复杂参数，避免解析丢失
+        // 优先使用原始链接 (透传)，只修改 Hash 名称
         if (node.origLink) {
             try {
-                // vmess 是 base64 编码的 JSON，不能直接 URL 解析，保持原有逻辑生成
                 if (node.type !== 'vmess') {
                     const u = new URL(node.origLink);
                     u.hash = safe(node.name);
                     return u.toString();
                 }
-            } catch(e) {
-                // 如果原始链接格式怪异导致解析失败，回退到下面的生成逻辑
-            }
+            } catch(e) {}
         }
 
         if (node.type === 'vmess') {
@@ -270,7 +271,6 @@ const parseYamlProxies = (content) => {
             if (node.network === 'ws') {
                 node["ws-opts"] = { path: getVal('path')||'/', headers: { Host: getVal('host')||'' } };
             }
-            // YAML 无法保留 origLink，因为源本身就是 YAML 对象
             node.link = generateNodeLink(node); 
             nodes.push(node);
         }
@@ -329,16 +329,15 @@ const parseNodesCommon = (text) => {
                     network: params.get('type') || 'tcp',
                     sni: params.get('sni'),
                     servername: params.get('sni') || params.get('host'),
-                    "skip-cert-verify": params.get('allowInsecure') === '1' || params.get('insecure') === '1', // 增强识别
+                    "skip-cert-verify": params.get('allowInsecure') === '1' || params.get('insecure') === '1',
                     flow: params.get('flow'),
                     "client-fingerprint": params.get('fp'),
-                    origLink: trimLine // 【保存原始链接】
+                    origLink: trimLine // 保存原始链接
                 };
                 
                 if (protocol === 'ss') {
                     let userStr = url.username;
                     try { userStr = decodeURIComponent(url.username); } catch(e) {}
-                    
                     if (userStr.includes(':')) {
                         const parts = userStr.split(':');
                         node.cipher = parts[0];
@@ -452,9 +451,13 @@ rules:
             .replace(/<BIAOSUB_PROXIES>/g, proxiesStr)
             .replace(/<BIAOSUB_GROUP_ALL>/g, groupsStr);
 
+        // 【关键修改】添加禁止缓存头
         return c.text(finalYaml, 200, { 
             'Content-Type': 'text/yaml; charset=utf-8',
-            'Content-Disposition': 'attachment; filename="biaosub.yaml"'
+            'Content-Disposition': 'attachment; filename="biaosub.yaml"',
+            'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
         })
     } catch(e) { return c.text(e.message, 500) }
 })
@@ -477,10 +480,16 @@ app.get('/subscribe/base64', async (c) => {
             const allowed = params.include?.length ? new Set(params.include) : null;
             for (const node of nodes) {
                 if (allowed && !allowed.has(node.name)) continue;
-                links.push(generateNodeLink(node)); // 这里会触发优先使用 origLink 的逻辑
+                links.push(generateNodeLink(node)); // 透传
             }
         }
-        return c.text(btoa(encodeURIComponent(links.join('\n')).replace(/%([0-9A-F]{2})/g, (m, p1) => String.fromCharCode('0x' + p1))))
+        // 【关键修改】添加禁止缓存头
+        return c.text(btoa(encodeURIComponent(links.join('\n')).replace(/%([0-9A-F]{2})/g, (m, p1) => String.fromCharCode('0x' + p1))), 200, {
+            'Content-Type': 'text/plain; charset=utf-8',
+            'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+        })
     } catch(e) { return c.text(e.message, 500) }
 })
 

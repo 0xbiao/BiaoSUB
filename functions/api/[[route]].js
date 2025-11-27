@@ -29,6 +29,7 @@ const formatBytes = (bytes) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
 }
 
+// 极其宽容的 Base64 解码
 const safeBase64Decode = (str) => {
     if (!str) return '';
     try {
@@ -49,39 +50,42 @@ const safeBase64Encode = (str) => {
     } catch (e) { return btoa(str); }
 }
 
+// 递归深度解码：应对多重 Base64 嵌套的情况
 const deepBase64Decode = (str, depth = 0) => {
     if (depth > 3) return str;
-    if (!str || typeof str !== 'string') return str;
+    if (!str || typeof str !== 'string' || str.length < 10) return str;
+    
+    // 快速检查：如果包含明显非 Base64 字符（空格除外），直接返回
+    // 但 URL safe base64 允许 -_
+    if (/[^A-Za-z0-9+/=_ \-\n\r]/.test(str)) return str;
+
     try {
-        const clean = str.replace(/\s/g, '');
-        // 宽松检查，只要不包含空格且长度足够，就尝试解码
-        if (clean.length < 10) return str;
-        
-        // 尝试解码
+        let clean = str.replace(/\s/g, '');
         let safeStr = clean.replace(/-/g, '+').replace(/_/g, '/');
         while (safeStr.length % 4) safeStr += '=';
         
-        // 捕获 atob 错误
-        let binary;
-        try { binary = atob(safeStr); } catch(e) { return str; }
+        // 尝试解码
+        const binary = atob(safeStr);
+        // 如果解码出来包含大量不可见字符(二进制)，可能不是文本，放弃
+        let nullCount = 0;
+        for(let i=0; i<Math.min(binary.length, 100); i++) {
+            if(binary.charCodeAt(i) < 8) nullCount++;
+        }
+        if(nullCount > 2) return str;
 
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
         const decoded = new TextDecoder('utf-8').decode(bytes);
 
-        // 递归检查
-        if (decoded.includes('://') || decoded.includes('proxies:') || decoded.includes('server:') || decoded.includes('vmess://')) {
+        // 如果解码后的内容看起来像是 URL 或 代理配置，尝试继续解码（套娃）
+        if (decoded.includes('://') || decoded.includes('proxies:') || decoded.includes('vmess://')) {
             return deepBase64Decode(decoded, depth + 1);
         }
-        // 乱码检查：如果非 UTF8 字符比例过高，可能是二进制数据或错误解码，回退
-        // 这里简单判断：如果包含大量不可见字符，视为失败
-        if (/[\x00-\x08\x0E-\x1F]/.test(decoded)) return str;
-        
         return decoded;
     } catch (e) { return str; }
 }
 
-// --- 核心：智能 Fetch ---
+// --- 核心：智能 Fetch (UA 策略调整) ---
 const extractUserInfo = (headers) => {
     let infoStr = null;
     headers.forEach((val, key) => { if (key.toLowerCase().includes('userinfo')) infoStr = val; });
@@ -99,18 +103,24 @@ const extractUserInfo = (headers) => {
 }
 
 const fetchWithSmartUA = async (url) => {
-  const userAgents = ['ClashMeta/1.0', 'v2rayNG/1.8.5', 'Mozilla/5.0'];
-  let bestRes = null;
+  // 策略调整：优先使用 v2rayNG 获取 Base64/Raw 列表，因为这最容易解析且不易出错。
+  // 只有当 v2rayNG 失败时，才尝试 Clash。
+  const userAgents = ['v2rayNG/1.8.5', 'ClashMeta/1.0', 'Mozilla/5.0'];
+  
   for (const ua of userAgents) {
     try {
       const controller = new AbortController();
       const id = setTimeout(() => controller.abort(), 15000);
       const res = await fetch(url, { headers: { 'User-Agent': ua }, signal: controller.signal, cache: 'no-store' });
       clearTimeout(id);
+      
       if (res.ok) {
         const clone = res.clone();
         const text = await clone.text();
-        if (text.includes('<!DOCTYPE html>')) continue;
+        
+        // 简单验证：必须包含有效内容
+        if (text.length < 10) continue; 
+        
         const info = extractUserInfo(res.headers);
         if (info) Object.defineProperty(res, 'trafficInfo', { value: info, writable: true });
         Object.defineProperty(res, 'prefetchedText', { value: text, writable: true });
@@ -118,15 +128,17 @@ const fetchWithSmartUA = async (url) => {
       }
     } catch (e) {}
   }
-  return bestRes;
+  return null;
 }
 
-// --- 核心：生成链接 ---
+// --- 核心：生成链接 (标准化) ---
 const generateNodeLink = (node) => {
     const safeName = encodeURIComponent(node.name || 'Node');
 
+    // 1. 如果有原始链接，直接复用 (最稳妥)
     if (node.origLink) {
         try {
+            // VMess 需要特殊处理改名，因为它的名字藏在 JSON 里
             if (node.origLink.startsWith('vmess://')) {
                 const base64Part = node.origLink.substring(8);
                 const jsonStr = safeBase64Decode(base64Part);
@@ -134,12 +146,16 @@ const generateNodeLink = (node) => {
                 vmessObj.ps = node.name; 
                 return 'vmess://' + safeBase64Encode(JSON.stringify(vmessObj));
             }
+            // 其他协议直接替换 Hash
             const hashIndex = node.origLink.lastIndexOf('#');
             if (hashIndex !== -1) return node.origLink.substring(0, hashIndex) + '#' + safeName;
             return node.origLink + '#' + safeName;
-        } catch(e) { return node.origLink; }
+        } catch(e) {
+            return node.origLink; // 解析失败则原样返回
+        }
     }
 
+    // 2. 如果没有原始链接 (来自 YAML 解析)，则构建
     try {
         if (node.type === 'vmess') {
             const vmessObj = {
@@ -186,132 +202,38 @@ const generateNodeLink = (node) => {
              const userPart = safeBase64Encode(`${node.cipher}:${node.password}`);
              return `ss://${userPart}@${node.server}:${node.port}#${safeName}`;
         }
-
     } catch (e) {}
     return '';
 }
 
-// --- 核心：解析器 (兼容版) ---
+// --- 核心：万能解析器 (暴力版) ---
 const parseNodesCommon = (text) => {
-    let nodes = [];
-    let decoded = deepBase64Decode(text);
-    // 如果解码失败（变为空或者乱码），则回退使用原始文本尝试解析
-    if (!decoded || decoded.length < 5) decoded = text;
+    const nodes = [];
+    const rawSet = new Set(); // 用于去重
 
-    // 1. YAML / Clash 解析 (严格匹配 proxies 关键字)
-    if (/^proxies:/m.test(decoded)) {
-        try {
-            const lines = decoded.split(/\r?\n/);
-            let inProxyBlock = false;
-            let currentIndent = -1;
-            let blockBuffer = [];
-
-            const processBlock = (block) => {
-                const getVal = (k) => {
-                    const reg = new RegExp(`^\\s*${k}:\\s*(?:['"](.*?)['"]|(.*?))(?:$|#)`, 'i');
-                    const line = block.find(l => reg.test(l));
-                    if (!line) return undefined;
-                    const m = line.match(reg);
-                    return (m[1] || m[2]).trim();
-                };
-                
-                const getNestedVal = (parentKey, childKey) => {
-                    let parentIdx = block.findIndex(l => new RegExp(`^\\s*${parentKey}:`).test(l));
-                    if (parentIdx === -1) return undefined;
-                    for (let i = parentIdx + 1; i < block.length; i++) {
-                        if (block[i].trim().startsWith(childKey + ':')) {
-                             const m = block[i].match(/:\s*(?:['"](.*?)['"]|(.*?))$/);
-                             return m ? (m[1] || m[2]).trim() : undefined;
-                        }
-                        if (block[i].search(/\S/) <= block[parentIdx].search(/\S/)) break;
-                    }
-                    return undefined;
-                }
-
-                let type = getVal('type');
-                if (!type || ['url-test', 'selector', 'fallback', 'direct', 'reject', 'load-balance'].includes(type)) return;
-
-                const node = {
-                    name: getVal('name'),
-                    type: type,
-                    server: getVal('server'),
-                    port: getVal('port'),
-                    uuid: getVal('uuid'),
-                    cipher: getVal('cipher'),
-                    password: getVal('password'),
-                    udp: getVal('udp') === 'true',
-                    tls: getVal('tls') === 'true',
-                    "skip-cert-verify": getVal('skip-cert-verify') === 'true',
-                    servername: getVal('servername'),
-                    sni: getVal('sni'),
-                    network: getVal('network'),
-                    flow: getVal('flow'),
-                    "client-fingerprint": getVal('client-fingerprint')
-                };
-
-                if (!node.sni && node.servername) node.sni = node.servername;
-                if (!node.servername && node.sni) node.servername = node.sni;
-
-                const wsPath = getNestedVal('ws-opts', 'path') || getVal('ws-path');
-                const wsHost = getNestedVal('headers', 'Host') || getNestedVal('ws-headers', 'Host');
-                if (wsPath || wsHost || node.network === 'ws') {
-                    node.network = 'ws';
-                    node['ws-opts'] = { path: wsPath || '/', headers: { Host: wsHost || '' } };
-                }
-
-                const pbk = getNestedVal('reality-opts', 'public-key');
-                const sid = getNestedVal('reality-opts', 'short-id');
-                if (pbk) {
-                    node.tls = true;
-                    node.reality = { publicKey: pbk, shortId: sid };
-                    if (!node['client-fingerprint']) node['client-fingerprint'] = 'chrome';
-                }
-
-                if (node.server && node.port) {
-                    node.link = generateNodeLink(node);
-                    nodes.push(node);
-                }
-            };
-
-            for (const line of lines) {
-                if (!line.trim() || line.trim().startsWith('#')) continue;
-                if (/^proxies:/i.test(line)) { inProxyBlock = true; continue; }
-                if (inProxyBlock && /^[a-zA-Z0-9_-]+:/i.test(line) && !line.startsWith(' ')) {
-                    if (blockBuffer.length > 0) processBlock(blockBuffer);
-                    inProxyBlock = false;
-                    blockBuffer = [];
-                    break;
-                }
-                if (inProxyBlock) {
-                    if (line.trim().startsWith('-')) {
-                        if (blockBuffer.length > 0) processBlock(blockBuffer);
-                        blockBuffer = [line.replace(/^(\s*)-\s*/, '$1  ')];
-                        currentIndent = line.search(/\S/);
-                    } else if (blockBuffer.length > 0) {
-                        blockBuffer.push(line);
-                    }
-                }
-            }
-            if (blockBuffer.length > 0) processBlock(blockBuffer);
-        } catch (e) { console.error('YAML Parse Error', e); }
-        if (nodes.length > 0) return nodes;
+    // 辅助：添加节点
+    const addNode = (n) => {
+        if (!n.link) n.link = generateNodeLink(n);
+        if (n.link && n.link.length > 15 && !rawSet.has(n.link)) {
+            rawSet.add(n.link);
+            nodes.push(n);
+        }
     }
 
-    // 2. 常规链接解析 (Base64 / 纯文本)
-    // 关键修复：分别处理解码后的内容和原始内容，防止解码器误判导致数据丢失
-    const processText = (txt) => {
-        // 强制插入换行，防止所有链接在同一行
-        const splitText = txt.replace(/(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive):\/\//gi, '\n$1://');
-        const lines = splitText.split(/[\r\n]+/);
-        for (const line of lines) {
-            const trimLine = line.trim();
-            if (!trimLine || trimLine.length < 10) continue;
-            if (!/^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive):\/\//i.test(trimLine)) continue;
+    // 1. 尝试解码
+    let decoded = deepBase64Decode(text);
+    // 如果解码后变成了空串，或包含乱码，回退到原文
+    if (!decoded || decoded.length < 5 || /[\x00-\x08]/.test(decoded)) decoded = text;
 
+    // 2. 暴力提取：正则表达式扫描全文 (应对非标准格式、混合内容)
+    // 匹配所有标准链接格式
+    const linkRegex = /(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive):\/\/[^\s\n"']+/gi;
+    const matches = decoded.match(linkRegex);
+    
+    if (matches) {
+        for (const match of matches) {
+            const trimLine = match.trim();
             try {
-                // 如果已经存在相同的原始链接，跳过
-                if (nodes.some(n => n.origLink === trimLine)) continue;
-
                 let node = { origLink: trimLine, type: 'raw' };
                 if (trimLine.startsWith('vmess://')) {
                     const b64 = trimLine.substring(8);
@@ -325,22 +247,89 @@ const parseNodesCommon = (text) => {
                         node.server = url.hostname;
                         node.port = url.port;
                     } catch(e) {
-                         const match = trimLine.match(/^(.*?):\/\/.*?#(.*?)$/);
-                        if (match) { node.name = decodeURIComponent(match[2]); node.type = match[1]; }
+                        // 如果 URL 解析失败，正则提取 Name
+                        const m = trimLine.match(/#(.*?)$/);
+                        if(m) node.name = decodeURIComponent(m[1]);
                     }
                 }
                 if (!node.name) node.name = 'Node';
-                node.link = generateNodeLink(node);
-                nodes.push(node);
+                addNode(node);
             } catch(e) {}
         }
     }
 
-    // 优先处理解码后的文本
-    processText(decoded);
-    // 如果解码后没有找到节点，或者节点数量极少，尝试直接处理原文 (应对非Base64的纯文本订阅)
-    if (nodes.length === 0 && text !== decoded) {
-        processText(text);
+    // 3. 如果暴力提取没找到多少节点，且内容像 YAML，则尝试结构化解析 (作为补充)
+    if (nodes.length < 1 && (decoded.includes('proxies:') || decoded.includes('name:'))) {
+        try {
+            const lines = decoded.split(/\r?\n/);
+            let inProxyBlock = false;
+            let currentBlock = [];
+
+            const processYamlBlock = (block) => {
+                const getVal = (k) => {
+                    const reg = new RegExp(`${k}:\\s*(?:['"](.*?)['"]|(.*?))(?:$|#|,|})`, 'i');
+                    const line = block.find(l => reg.test(l));
+                    if (!line) return undefined;
+                    const m = line.match(reg);
+                    return (m[1] || m[2]).trim();
+                };
+                
+                let type = getVal('type');
+                if (!type || ['url-test', 'selector', 'fallback', 'direct', 'reject', 'load-balance'].includes(type)) return;
+
+                const node = {
+                    name: getVal('name'), type, server: getVal('server'), port: getVal('port'),
+                    uuid: getVal('uuid'), cipher: getVal('cipher'), password: getVal('password'),
+                    udp: getVal('udp') === 'true', tls: getVal('tls') === 'true',
+                    "skip-cert-verify": getVal('skip-cert-verify') === 'true',
+                    servername: getVal('servername') || getVal('sni'), sni: getVal('sni'),
+                    network: getVal('network'), flow: getVal('flow'),
+                    "client-fingerprint": getVal('client-fingerprint')
+                };
+
+                // WS 和 Reality 参数提取 (简化版，直接在 block 里找)
+                const findInBlock = (key) => {
+                    const line = block.find(l => l.includes(key));
+                    if(!line) return undefined;
+                    const m = line.match(/:\s*(?:['"](.*?)['"]|(.*?))$/);
+                    return m ? (m[1]||m[2]).trim() : undefined;
+                }
+
+                if(node.network === 'ws' || block.some(l=>l.includes('ws-opts'))) {
+                    node.network = 'ws';
+                    node['ws-opts'] = { 
+                        path: findInBlock('path') || '/', 
+                        headers: { Host: findInBlock('Host') || '' } 
+                    };
+                }
+                if(block.some(l=>l.includes('public-key'))) {
+                    node.tls = true;
+                    node.reality = { publicKey: findInBlock('public-key'), shortId: findInBlock('short-id') };
+                }
+
+                if (node.server && node.port) addNode(node);
+            }
+
+            for (const line of lines) {
+                if (!line.trim() || line.trim().startsWith('#')) continue;
+                if (line.includes('proxies:')) { inProxyBlock = true; continue; }
+                if (inProxyBlock) {
+                    if (line.trim().startsWith('-') && line.includes('name:')) {
+                        if (currentBlock.length > 0) processYamlBlock(currentBlock);
+                        currentBlock = [line];
+                    } else if (currentBlock.length > 0) {
+                        currentBlock.push(line);
+                    }
+                    // 如果缩进回到顶部，或者遇到其他顶级块，结束
+                    if (!line.startsWith(' ') && !line.startsWith('-') && !line.includes('proxies:')) {
+                        inProxyBlock = false;
+                        if (currentBlock.length > 0) processYamlBlock(currentBlock);
+                        currentBlock = [];
+                    }
+                }
+            }
+            if (currentBlock.length > 0) processYamlBlock(currentBlock);
+        } catch (e) {}
     }
 
     return nodes;

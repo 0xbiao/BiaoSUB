@@ -5,7 +5,7 @@ import { handle } from 'hono/cloudflare-pages'
 const app = new Hono().basePath('/api')
 app.use('/*', cors())
 
-// --- Auth Middleware ---
+// --- 鉴权中间件 ---
 app.use('/*', async (c, next) => {
   const path = c.req.path
   if (path.endsWith('/login') || path.includes('/g/')) return await next()
@@ -15,7 +15,7 @@ app.use('/*', async (c, next) => {
 })
 app.onError((err, c) => c.json({ error: err.message }, 500))
 
-// --- Utils ---
+// --- 工具函数 ---
 const generateToken = () => {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
     let result = '';
@@ -69,7 +69,7 @@ const deepBase64Decode = (str, depth = 0) => {
     } catch (e) { return str; }
 }
 
-// --- Smart Fetch ---
+// --- 核心：智能 Fetch (混合抓取模式) ---
 const extractUserInfo = (headers) => {
     let infoStr = null;
     headers.forEach((val, key) => { if (key.toLowerCase().includes('userinfo')) infoStr = val; });
@@ -112,7 +112,7 @@ const fetchWithSmartUA = async (url) => {
   return null;
 }
 
-// --- Link Generator (V2Ray) ---
+// --- 核心：生成链接 ---
 const generateNodeLink = (node) => {
     const safeName = encodeURIComponent(node.name || 'Node');
     if (node.origLink) {
@@ -172,11 +172,10 @@ const generateNodeLink = (node) => {
     return '';
 }
 
-// --- Clash Meta Converter (Robust) ---
+// --- 核心：Clash Meta 转换器 (稳健版) ---
 const toClashProxy = (node) => {
     try {
         if (!node.name || !node.server || !node.port) return null;
-
         const common = `  - name: ${node.name}
     server: ${node.server}
     port: ${node.port}`;
@@ -188,7 +187,6 @@ const toClashProxy = (node) => {
     cipher: ${node.cipher}
     password: ${node.password}`;
         }
-        
         if (node.type === 'vmess') {
             if (!node.uuid) return null;
             let res = `${common}
@@ -208,7 +206,6 @@ const toClashProxy = (node) => {
             }
             return res;
         }
-        
         if (node.type === 'vless') {
             if (!node.uuid) return null;
             let res = `${common}
@@ -234,12 +231,10 @@ const toClashProxy = (node) => {
             }
             return res;
         }
-        
         if (node.type === 'hysteria2') {
             let res = `${common}
     type: hysteria2
     skip-cert-verify: ${node['skip-cert-verify'] || false}`;
-            // Only add fields if they exist
             if (node.password) res += `\n    password: ${node.password}`;
             if (node.sni) res += `\n    sni: ${node.sni}`;
             if (node.obfs) {
@@ -252,7 +247,7 @@ const toClashProxy = (node) => {
     } catch(e) { return null; }
 }
 
-// --- Universal Parser ---
+// --- 核心：万能解析器 ---
 const parseNodesCommon = (text) => {
     const nodes = [];
     const rawSet = new Set(); 
@@ -346,7 +341,7 @@ const parseNodesCommon = (text) => {
     return nodes;
 }
 
-// --- Core Routes ---
+// --- 核心路由 ---
 app.get('/g/:token', async (c) => {
     const token = c.req.param('token');
     const format = c.req.query('format') || 'base64';
@@ -356,20 +351,26 @@ app.get('/g/:token', async (c) => {
         if (!group) return c.text('Invalid Group Token', 404);
         
         const baseConfig = JSON.parse(group.config || '[]');
-        const clashConfig = group.clash_config ? JSON.parse(group.clash_config) : null;
+        const clashConfig = group.clash_config ? JSON.parse(group.clash_config) : { mode: 'generate' };
 
+        // 1. Raw YAML Mode: 直接返回托管的 YAML 内容
+        if (format === 'clash' && clashConfig.mode === 'raw') {
+            return c.text(clashConfig.raw_yaml || "", 200, { 'Content-Type': 'text/yaml; charset=utf-8' });
+        }
+
+        // 2. Generate Mode
         let targetConfig = baseConfig;
-        if (format === 'clash' && clashConfig && clashConfig.resources && clashConfig.resources.length > 0) {
+        if (format === 'clash' && clashConfig.resources && clashConfig.resources.length > 0) {
             targetConfig = clashConfig.resources;
         }
 
         let allNodes = [];
-        // Helper to check deduplication
         const allNodeNamesSet = new Set();
 
         for (const item of targetConfig) {
             const sub = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE id = ?").bind(item.subId).first();
             if (!sub) continue; 
+            
             let content = "";
             if (sub.type === 'node') { content = sub.url; } 
             else {
@@ -377,6 +378,7 @@ app.get('/g/:token', async (c) => {
                 if (res && res.ok) content = res.prefetchedText || await res.text();
             }
             if (!content) continue;
+
             const nodes = parseNodesCommon(content);
             let allowed = 'all';
             if (item.include && Array.isArray(item.include) && item.include.length > 0) allowed = new Set(item.include);
@@ -384,7 +386,7 @@ app.get('/g/:token', async (c) => {
             for (const node of nodes) {
                 if (allowed !== 'all' && !allowed.has(node.name)) continue;
                 
-                // Deterministic Deduplication
+                // Deterministic Deduplication: 保证名称唯一且稳定
                 let name = node.name.trim();
                 let i = 1; 
                 let originalName = name;
@@ -403,26 +405,27 @@ app.get('/g/:token', async (c) => {
             if (!clashConfig) return c.text("Clash config not found.", 404);
             
             let yaml = (clashConfig.header || "") + "\n\nproxies:\n";
-            const validNodeNames = new Set();
+            // 记录实际生成成功的节点名称
+            const generatedNodeNames = new Set();
             
-            // 1. Generate Proxies
+            // Generate Proxies
             for (const node of allNodes) {
                 const proxyYaml = toClashProxy(node);
                 if (proxyYaml) {
                     yaml += proxyYaml + "\n";
-                    validNodeNames.add(node.name);
+                    generatedNodeNames.add(node.name);
                 }
             }
 
-            // 2. Generate Groups (With Validation)
+            // Generate Groups (Strict Filter)
             yaml += "\nproxy-groups:\n";
             if (clashConfig.groups && Array.isArray(clashConfig.groups)) {
                 for (const g of clashConfig.groups) {
                     yaml += `  - name: ${g.name}\n    type: ${g.type}\n    proxies:\n`;
                     if (g.proxies && Array.isArray(g.proxies)) {
                         g.proxies.forEach(p => {
-                            // Filter: Only include if node exists OR is a special keyword
-                            if (validNodeNames.has(p) || ['DIRECT', 'REJECT', 'NO-RESOLVE'].includes(p)) {
+                            // 关键修复：只添加实际存在的节点，或者特殊的保留字
+                            if (generatedNodeNames.has(p) || ['DIRECT', 'REJECT', 'NO-RESOLVE'].includes(p)) {
                                 yaml += `      - ${p}\n`;
                             }
                         });
@@ -439,18 +442,76 @@ app.get('/g/:token', async (c) => {
 })
 
 // --- API Endpoints ---
-app.get('/subs', async (c) => { const {results} = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all(); return c.json({success:true, data:results.map(i=>{ try { i.info = JSON.parse(i.info); } catch(e) { i.info = {}; } return i; })}) })
+app.get('/subs', async (c) => { 
+    const {results} = await c.env.DB.prepare("SELECT * FROM subscriptions ORDER BY sort_order ASC, id DESC").all(); 
+    return c.json({success:true, data:results.map(i=>{ try { i.info = JSON.parse(i.info); } catch(e) { i.info = {}; } return i; })}) 
+})
 app.post('/subs', async (c) => { const b=await c.req.json(); await c.env.DB.prepare("INSERT INTO subscriptions (name,url,type,params,info,sort_order,status) VALUES (?,?,?,?,?,0,1)").bind(b.name,b.url,b.type||'sub',JSON.stringify({}),'{}').run(); return c.json({success:true}) })
-app.put('/subs/:id', async (c) => { const b = await c.req.json(); const id = c.req.param('id'); let parts = ["updated_at=CURRENT_TIMESTAMP"]; let args = []; if (b.name!==undefined){parts.push("name=?");args.push(b.name)} if(b.url!==undefined){parts.push("url=?");args.push(b.url)} if (b.type!==undefined){parts.push("type=?");args.push(b.type)} if(b.status!==undefined){parts.push("status=?");args.push(parseInt(b.status))} if (b.info){parts.push("info=?");args.push(JSON.stringify(b.info))} const query = `UPDATE subscriptions SET ${parts.join(', ')} WHERE id=?`; args.push(id); await c.env.DB.prepare(query).bind(...args).run(); return c.json({success:true}) })
+app.put('/subs/:id', async (c) => { 
+    const b = await c.req.json(); const id = c.req.param('id');
+    let parts = ["updated_at=CURRENT_TIMESTAMP"]; let args = [];
+    if (b.name!==undefined){parts.push("name=?");args.push(b.name)} if(b.url!==undefined){parts.push("url=?");args.push(b.url)}
+    if (b.type!==undefined){parts.push("type=?");args.push(b.type)} if(b.status!==undefined){parts.push("status=?");args.push(parseInt(b.status))}
+    if (b.info){parts.push("info=?");args.push(JSON.stringify(b.info))}
+    const query = `UPDATE subscriptions SET ${parts.join(', ')} WHERE id=?`; args.push(id);
+    await c.env.DB.prepare(query).bind(...args).run(); return c.json({success:true}) 
+})
 app.delete('/subs/:id', async (c) => { await c.env.DB.prepare("DELETE FROM subscriptions WHERE id=?").bind(c.req.param('id')).run(); return c.json({success:true}) })
 app.post('/sort', async (c) => { const {ids}=await c.req.json(); const s=c.env.DB.prepare("UPDATE subscriptions SET sort_order=? WHERE id=?"); await c.env.DB.batch(ids.map((id,i)=>s.bind(i,id))); return c.json({success:true}) })
-app.get('/groups', async (c) => { const {results} = await c.env.DB.prepare("SELECT * FROM groups ORDER BY sort_order ASC, id DESC").all(); return c.json({success:true, data:results.map(g => ({...g, config: JSON.parse(g.config||'[]'), clash_config: g.clash_config ? JSON.parse(g.clash_config) : { header: "", groups: [], rules: "", resources: [] }}))}) })
-app.post('/groups', async (c) => { const b=await c.req.json(); const token = generateToken(); const clashConfig = b.clash_config || { header: "", groups: [], rules: "", resources: [] }; await c.env.DB.prepare("INSERT INTO groups (name, token, config, clash_config, status, sort_order) VALUES (?, ?, ?, ?, 1, 0)").bind(b.name, token, JSON.stringify(b.config||[]), JSON.stringify(clashConfig)).run(); return c.json({success:true}) })
-app.put('/groups/:id', async (c) => { const b = await c.req.json(); const id = c.req.param('id'); let parts = ["updated_at=CURRENT_TIMESTAMP"]; let args = []; if(b.name!==undefined){parts.push("name=?");args.push(b.name)} if(b.config!==undefined){parts.push("config=?");args.push(JSON.stringify(b.config))} if(b.clash_config!==undefined){parts.push("clash_config=?");args.push(JSON.stringify(b.clash_config))} if(b.status!==undefined){parts.push("status=?");args.push(parseInt(b.status))} if(b.refresh_token){parts.push("token=?");args.push(generateToken())} const query = `UPDATE groups SET ${parts.join(', ')} WHERE id=?`; args.push(id); await c.env.DB.prepare(query).bind(...args).run(); return c.json({success:true}) })
+
+// --- 聚合组管理 (Updated for raw mode) ---
+app.get('/groups', async (c) => { 
+    const {results} = await c.env.DB.prepare("SELECT * FROM groups ORDER BY sort_order ASC, id DESC").all(); 
+    return c.json({success:true, data:results.map(g => ({
+        ...g, 
+        config: JSON.parse(g.config||'[]'),
+        clash_config: g.clash_config ? JSON.parse(g.clash_config) : { mode: 'generate', header: "", groups: [], rules: "", resources: [], raw_yaml: "" }
+    }))}) 
+})
+app.post('/groups', async (c) => { 
+    const b=await c.req.json(); 
+    const token = generateToken();
+    const clashConfig = b.clash_config || { mode: 'generate', header: "", groups: [], rules: "", resources: [], raw_yaml: "" };
+    await c.env.DB.prepare("INSERT INTO groups (name, token, config, clash_config, status, sort_order) VALUES (?, ?, ?, ?, 1, 0)")
+        .bind(b.name, token, JSON.stringify(b.config||[]), JSON.stringify(clashConfig)).run(); 
+    return c.json({success:true}) 
+})
+app.put('/groups/:id', async (c) => {
+    const b = await c.req.json(); const id = c.req.param('id');
+    let parts = ["updated_at=CURRENT_TIMESTAMP"]; let args = [];
+    if(b.name!==undefined){parts.push("name=?");args.push(b.name)} 
+    if(b.config!==undefined){parts.push("config=?");args.push(JSON.stringify(b.config))}
+    if(b.clash_config!==undefined){parts.push("clash_config=?");args.push(JSON.stringify(b.clash_config))}
+    if(b.status!==undefined){parts.push("status=?");args.push(parseInt(b.status))}
+    if(b.refresh_token){parts.push("token=?");args.push(generateToken())}
+    const query = `UPDATE groups SET ${parts.join(', ')} WHERE id=?`; args.push(id);
+    await c.env.DB.prepare(query).bind(...args).run(); return c.json({success:true})
+})
 app.delete('/groups/:id', async (c) => { await c.env.DB.prepare("DELETE FROM groups WHERE id=?").bind(c.req.param('id')).run(); return c.json({success:true}) })
-app.post('/check', async (c) => { const { url, type } = await c.req.json(); try { let content = ""; let stats = null; if (type === 'node') { content = url; } else { const res = await fetchWithSmartUA(url); if(!res || !res.ok) throw new Error(`Connect Failed`); content = res.prefetchedText || await res.text(); if(res.trafficInfo) stats = res.trafficInfo; } const nodes = parseNodesCommon(content); return c.json({ success: true, data: { valid: true, nodeCount: nodes.length, stats, nodes } }); } catch(e) { return c.json({ success: false, error: e.message }) } })
+
+// --- Check / Login ---
+app.post('/check', async (c) => {
+    const { url, type } = await c.req.json();
+    try {
+        let content = ""; let stats = null;
+        if (type === 'node') { content = url; } 
+        else {
+            const res = await fetchWithSmartUA(url);
+            if(!res || !res.ok) throw new Error(`Connect Failed`);
+            content = res.prefetchedText || await res.text();
+            if(res.trafficInfo) stats = res.trafficInfo;
+        }
+        const nodes = parseNodesCommon(content);
+        return c.json({ success: true, data: { valid: true, nodeCount: nodes.length, stats, nodes } });
+    } catch(e) { return c.json({ success: false, error: e.message }) }
+})
 app.post('/login', async (c) => { const {password}=await c.req.json(); return c.json({success: password===c.env.ADMIN_PASSWORD}) })
 app.get('/settings', async(c)=>{return c.json({success:true,data:{}})}); app.post('/settings', async(c)=>{return c.json({success:true})})
-app.post('/backup/import', async (c) => { const {items, groups}=await c.req.json(); if(items) { const s=c.env.DB.prepare("INSERT INTO subscriptions (name, url, type, info, params, status, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)"); await c.env.DB.batch(items.map(i=>s.bind(i.name,i.url,i.type||'subscription',JSON.stringify(i.info),JSON.stringify({}),i.status??1,i.sort_order??0))); } if(groups) { const s=c.env.DB.prepare("INSERT INTO groups (name, token, config, status, sort_order) VALUES (?, ?, ?, ?, ?)"); await c.env.DB.batch(groups.map(g=>s.bind(g.name, g.token, JSON.stringify(g.config), g.status??1, g.sort_order??0))); } return c.json({success:true}) })
+app.post('/backup/import', async (c) => { 
+    const {items, groups}=await c.req.json(); 
+    if(items) { const s=c.env.DB.prepare("INSERT INTO subscriptions (name, url, type, info, params, status, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)"); await c.env.DB.batch(items.map(i=>s.bind(i.name,i.url,i.type||'subscription',JSON.stringify(i.info),JSON.stringify({}),i.status??1,i.sort_order??0))); }
+    if(groups) { const s=c.env.DB.prepare("INSERT INTO groups (name, token, config, status, sort_order) VALUES (?, ?, ?, ?, ?)"); await c.env.DB.batch(groups.map(g=>s.bind(g.name, g.token, JSON.stringify(g.config), g.status??1, g.sort_order??0))); }
+    return c.json({success:true}) 
+})
 
 export const onRequest = handle(app)

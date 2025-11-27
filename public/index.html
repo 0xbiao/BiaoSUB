@@ -99,7 +99,7 @@
                         <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                             <div>
                                 <h2 class="card-title text-lg text-accent">{{ group.name }}</h2>
-                                <div class="text-xs text-slate-500 mt-1">包含资源: <span class="text-slate-300">{{ group.config.length }}</span> 个</div>
+                                <div class="text-xs text-slate-500 mt-1">包含资源: <span class="text-slate-300">{{ getGroupResourceCount(group) }}</span> 个</div>
                             </div>
                             <div class="flex gap-2 flex-wrap">
                                 <button @click="copyGroupLink(group, 'clash')" class="btn btn-sm bg-[#1e1e1e] hover:bg-[#2d2d2d] text-slate-400 border-slate-600"><i class="fa-solid fa-cat"></i> Clash</button>
@@ -110,12 +110,18 @@
                             </div>
                         </div>
                         <div class="divider my-1"></div>
-                        <div class="flex flex-wrap gap-2">
+                        <div class="flex flex-wrap gap-2" v-if="group.config && group.config.length > 0">
                             <span v-for="conf in group.config" :key="conf.subId" class="badge badge-neutral text-xs">
                                 {{ getResourceName(conf.subId) }}
                                 <span v-if="Array.isArray(conf.include)" class="ml-1 text-accent">({{ conf.include.length }})</span>
                                 <span v-else class="ml-1 text-slate-500">(全)</span>
                             </span>
+                        </div>
+                        <div v-else class="text-xs text-slate-600 italic">V2Ray: 未选择资源</div>
+                        
+                        <div class="mt-2 text-xs" v-if="group.clash_config">
+                            <span v-if="group.clash_config.mode === 'raw'" class="text-success">Clash: 托管模式</span>
+                            <span v-else class="text-slate-500">Clash: 资源 {{group.clash_config.resources ? group.clash_config.resources.length : 0}} 个</span>
                         </div>
                     </div>
                 </div>
@@ -144,13 +150,15 @@
         <dialog class="modal" :class="{ 'modal-open': groupModal.show }">
             <div class="modal-box bg-slate-800 border border-slate-700 max-w-4xl w-11/12">
                 <h3 class="font-bold text-lg text-white mb-4">{{ groupModal.isEdit ? '编辑聚合组' : '新建聚合组' }}</h3>
+                <input type="text" v-model="groupForm.name" placeholder="聚合组名称" class="input input-bordered w-full bg-slate-900 mb-4" />
+                
                 <div class="tabs tabs-boxed bg-slate-900 mb-4">
                     <a class="tab" :class="{'tab-active': groupModal.tab==='base'}" @click="groupModal.tab='base'">基础配置 (V2Ray)</a>
-                    <a class="tab" :class="{'tab-active': groupModal.tab==='clash'}" @click="groupModal.tab='clash'">Clash 配置 (独立)</a>
+                    <a class="tab" :class="{'tab-active': groupModal.tab==='clash'}" @click="groupModal.tab='clash'">Clash 生成</a>
+                    <a class="tab" :class="{'tab-active': groupModal.tab==='raw'}" @click="groupModal.tab='raw'">托管配置 (Raw)</a>
                 </div>
 
                 <div v-show="groupModal.tab==='base'" class="flex flex-col gap-4">
-                    <input type="text" v-model="groupForm.name" placeholder="聚合组名称" class="input input-bordered w-full bg-slate-900" />
                     <div class="text-sm text-slate-400">选择包含的资源 (V2Ray/Base64 专用)：</div>
                     <div class="max-h-96 overflow-y-auto custom-scrollbar bg-slate-900 rounded-lg border border-slate-700 p-2">
                         <div v-for="res in resources" :key="res.id" class="flex items-center justify-between p-3 border-b border-slate-800 last:border-none hover:bg-slate-800/50">
@@ -207,9 +215,9 @@
                                 <div class="flex gap-2 mb-2">
                                     <input v-model="g.name" placeholder="组名" class="input input-sm input-bordered w-1/3 bg-slate-900" />
                                     <select v-model="g.type" class="select select-sm select-bordered bg-slate-900">
-                                        <option value="select">Select (手动)</option>
-                                        <option value="url-test">URL-Test (自动)</option>
-                                        <option value="fallback">Fallback (故障)</option>
+                                        <option value="select">Select</option>
+                                        <option value="url-test">URL-Test</option>
+                                        <option value="fallback">Fallback</option>
                                         <option value="load-balance">Load-Balance</option>
                                     </select>
                                     <button @click="openClashNodeSelector(g)" class="btn btn-sm btn-outline btn-info">选择节点 ({{g.proxies?g.proxies.length:0}})</button>
@@ -228,6 +236,24 @@
                         <div class="collapse-content">
                             <textarea v-model="groupForm.clash_config.rules" class="code-editor w-full h-48 bg-[#1e1e1e] text-slate-300 p-2 outline-none resize-y rounded"></textarea>
                         </div>
+                    </div>
+                </div>
+
+                <div v-show="groupModal.tab==='raw'" class="flex flex-col gap-4">
+                    <div class="alert alert-info shadow-lg text-xs">
+                        <div>
+                            <i class="fa-solid fa-info-circle"></i>
+                            <span>在此模式下，Clash 订阅将直接返回下方输入的内容，不进行任何自动生成。V2Ray 订阅不受影响。</span>
+                        </div>
+                    </div>
+                    <div class="form-control">
+                        <label class="label cursor-pointer justify-start gap-4">
+                            <span class="label-text text-white">启用托管模式</span>
+                            <input type="checkbox" class="toggle toggle-accent" :checked="groupForm.clash_config.mode === 'raw'" @change="groupForm.clash_config.mode = $event.target.checked ? 'raw' : 'generate'" />
+                        </label>
+                    </div>
+                    <div v-if="groupForm.clash_config.mode === 'raw'">
+                        <textarea v-model="groupForm.clash_config.raw_yaml" placeholder="在此粘贴完整的 YAML 配置文件内容..." class="code-editor w-full h-96 bg-[#1e1e1e] text-slate-300 p-4 outline-none resize-y rounded border border-slate-700"></textarea>
                     </div>
                 </div>
 
@@ -324,11 +350,10 @@ createApp({
         
         const resourceModal = reactive({ show: false, isEdit: false }); const resourceForm = ref({ name: '', url: '', type: 'subscription' })
         const groupModal = reactive({ show: false, isEdit: false, tab: 'base' }); 
-        const groupForm = ref({ id: null, name: '', config: [], clash_config: { header: '', groups: [], rules: '', resources: [] } })
+        const groupForm = ref({ id: null, name: '', config: [], clash_config: { mode: 'generate', header: '', groups: [], rules: '', resources: [], raw_yaml: '' } })
         
         const nodeSelector = reactive({ show: false, loading: false, resourceId: null, resourceName: '', nodes: [], selected: 'all', tempSelected: [], targetConfigList: null })
         const clashNodeSelector = reactive({ show: false, loading: false, currentGroup: null, allNodeNames: [], tempSelected: [] })
-        
         const previewModal = reactive({ show: false, nodes: [] })
 
         const authFetch = async (url, opts = {}) => {
@@ -353,7 +378,6 @@ createApp({
         const getProgressClass = (p) => p > 90 ? 'progress-error' : (p > 75 ? 'progress-warning' : 'progress-primary')
         const isExpired = (ts) => ts ? Date.now() > ts * 1000 : false
 
-        // Resource Logic
         const openResourceModal = () => { resourceForm.value = { name: '', url: '', type: 'subscription' }; resourceModal.isEdit = false; resourceModal.show = true }
         const editResource = (item) => { resourceForm.value = {...item}; resourceModal.isEdit = true; resourceModal.show = true }
         const saveResource = async () => {
@@ -384,28 +408,32 @@ createApp({
             item.refreshing = false; loadResources()
         }
 
-        // Group Logic (Generic for both lists)
         const openGroupModal = () => { 
             groupForm.value = { 
                 name: '', config: [], 
-                clash_config: { header: "", groups: [{name: 'Proxy', type: 'select', proxies: []}], rules: "", resources: [] } 
+                clash_config: { mode: 'generate', header: "", groups: [{name: 'Proxy', type: 'select', proxies: []}], rules: "", resources: [], raw_yaml: "" } 
             }; 
             groupModal.isEdit = false; groupModal.show = true; groupModal.tab = 'base' 
         }
         const editGroup = (g) => { 
             groupForm.value = JSON.parse(JSON.stringify(g)); 
-            // Ensure data integrity
-            if(!groupForm.value.clash_config) groupForm.value.clash_config = { header: "", groups: [], rules: "", resources: [] };
+            if(!groupForm.value.clash_config) groupForm.value.clash_config = { mode: 'generate', header: "", groups: [], rules: "", resources: [], raw_yaml: "" };
             if(!groupForm.value.clash_config.resources) groupForm.value.clash_config.resources = [];
             groupModal.isEdit = true; groupModal.show = true; groupModal.tab = 'base'
         }
         
-        // Generalized Selection Logic
         const isResSelected = (list, id) => list.some(c => c.subId === id)
         const getResSelectionCount = (list, id) => {
             const c = list.find(x => x.subId === id)
             return (c && Array.isArray(c.include)) ? `已选 ${c.include.length} 个` : '包含所有'
         }
+        // 修复：统计所有资源数量
+        const getGroupResourceCount = (g) => {
+            let count = (g.config ? g.config.length : 0);
+            if(g.clash_config && g.clash_config.resources) count += g.clash_config.resources.length;
+            return count;
+        }
+
         const toggleResSelection = (list, id) => {
             const idx = list.findIndex(x => x.subId === id)
             if (idx > -1) list.splice(idx, 1)
@@ -413,14 +441,9 @@ createApp({
         }
         const getResourceName = (id) => resources.value.find(r => r.id === id)?.name || '未知资源'
 
-        // Generic Node Selector (V2Ray & Clash Resources)
         const openNodeSelector = async (res, targetList) => {
-            nodeSelector.resourceId = res.id; 
-            nodeSelector.resourceName = res.name; 
-            nodeSelector.targetConfigList = targetList; // Keep track of which list we are editing
-            nodeSelector.show = true; 
-            nodeSelector.loading = true;
-            
+            nodeSelector.resourceId = res.id; nodeSelector.resourceName = res.name; nodeSelector.targetConfigList = targetList; 
+            nodeSelector.show = true; nodeSelector.loading = true;
             const currentConf = targetList.find(c => c.subId === res.id)
             const checkRes = await authFetch(API+'/check', { method: 'POST', body: JSON.stringify({url: res.url, type: res.type}) })
             const d = await checkRes.json()
@@ -437,7 +460,6 @@ createApp({
             nodeSelector.loading = false
         }
         const confirmNodeSelection = () => {
-            // Find in the tracked list
             const idx = nodeSelector.targetConfigList.findIndex(x => x.subId === nodeSelector.resourceId)
             if (idx > -1) {
                 if (nodeSelector.tempSelected.length === nodeSelector.nodes.length) nodeSelector.targetConfigList[idx].include = 'all'
@@ -446,15 +468,10 @@ createApp({
             nodeSelector.show = false
         }
 
-        // Clash Strategy Group Logic
         const addClashGroup = () => { groupForm.value.clash_config.groups.push({name: 'NewGroup', type: 'select', proxies: []}) }
         
         const openClashNodeSelector = async (group) => {
-            clashNodeSelector.currentGroup = group;
-            clashNodeSelector.show = true;
-            clashNodeSelector.loading = true;
-            
-            // Use Clash Resources List
+            clashNodeSelector.currentGroup = group; clashNodeSelector.show = true; clashNodeSelector.loading = true;
             let allNames = []
             for(const conf of groupForm.value.clash_config.resources) {
                 const res = resources.value.find(r => r.id === conf.subId)
@@ -480,9 +497,7 @@ createApp({
         }
         const clashSelectAll = () => clashNodeSelector.tempSelected = [...clashNodeSelector.allNodeNames]
         const confirmClashNodeSelection = () => {
-            if(clashNodeSelector.currentGroup) {
-                clashNodeSelector.currentGroup.proxies = [...clashNodeSelector.tempSelected]
-            }
+            if(clashNodeSelector.currentGroup) clashNodeSelector.currentGroup.proxies = [...clashNodeSelector.tempSelected]
             clashNodeSelector.show = false
         }
 
@@ -517,7 +532,7 @@ createApp({
             isLoggedIn, loginPassword, loginLoading, handleLogin, logout,
             currentTab, resources, groups, submitting, toast,
             resourceModal, resourceForm, openResourceModal, editResource, saveResource, deleteResource, refreshResource,
-            groupModal, groupForm, openGroupModal, editGroup, saveGroup, deleteGroup, refreshToken, copyGroupLink,
+            groupModal, groupForm, openGroupModal, editGroup, saveGroup, deleteGroup, refreshToken, copyGroupLink, getGroupResourceCount,
             isResSelected, getResSelectionCount, toggleResSelection, getResourceName,
             nodeSelector, openNodeSelector, confirmNodeSelection,
             clashNodeSelector, addClashGroup, openClashNodeSelector, clashSelectAll, confirmClashNodeSelection,

@@ -54,24 +54,27 @@ const deepBase64Decode = (str, depth = 0) => {
     if (!str || typeof str !== 'string') return str;
     try {
         const clean = str.replace(/\s/g, '');
-        // 关键：如果不是 URL Safe Base64 字符集，或者太短，直接返回原样
-        if (clean.length < 10 || /[^A-Za-z0-9+/=_]/.test(clean)) return str;
+        // 宽松检查，只要不包含空格且长度足够，就尝试解码
+        if (clean.length < 10) return str;
         
         // 尝试解码
         let safeStr = clean.replace(/-/g, '+').replace(/_/g, '/');
         while (safeStr.length % 4) safeStr += '=';
         
-        const binary = atob(safeStr);
+        // 捕获 atob 错误
+        let binary;
+        try { binary = atob(safeStr); } catch(e) { return str; }
+
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
         const decoded = new TextDecoder('utf-8').decode(bytes);
 
-        // 递归检查：如果解码后的内容看起来还是 Base64，或者包含特定的编码特征
+        // 递归检查
         if (decoded.includes('://') || decoded.includes('proxies:') || decoded.includes('server:') || decoded.includes('vmess://')) {
-            // 如果是 vmess 等协议，说明解码成功，尝试是否还有套娃
             return deepBase64Decode(decoded, depth + 1);
         }
-        // 如果解码出来是乱码（非UTF8文本），通常意味着它不是我们要的文本 Base64，回退
+        // 乱码检查：如果非 UTF8 字符比例过高，可能是二进制数据或错误解码，回退
+        // 这里简单判断：如果包含大量不可见字符，视为失败
         if (/[\x00-\x08\x0E-\x1F]/.test(decoded)) return str;
         
         return decoded;
@@ -96,7 +99,6 @@ const extractUserInfo = (headers) => {
 }
 
 const fetchWithSmartUA = async (url) => {
-  // 调整 UA 顺序，ClashMeta 优先，有助于获取更全的 YAML 配置
   const userAgents = ['ClashMeta/1.0', 'v2rayNG/1.8.5', 'Mozilla/5.0'];
   let bestRes = null;
   for (const ua of userAgents) {
@@ -119,11 +121,10 @@ const fetchWithSmartUA = async (url) => {
   return bestRes;
 }
 
-// --- 核心：生成链接 (增强版) ---
+// --- 核心：生成链接 ---
 const generateNodeLink = (node) => {
     const safeName = encodeURIComponent(node.name || 'Node');
 
-    // 优先使用原始链接，并尝试替换 Hash 部分
     if (node.origLink) {
         try {
             if (node.origLink.startsWith('vmess://')) {
@@ -133,16 +134,12 @@ const generateNodeLink = (node) => {
                 vmessObj.ps = node.name; 
                 return 'vmess://' + safeBase64Encode(JSON.stringify(vmessObj));
             }
-            // 暴力字符串替换保底，防止 URL 解析失败
             const hashIndex = node.origLink.lastIndexOf('#');
             if (hashIndex !== -1) return node.origLink.substring(0, hashIndex) + '#' + safeName;
             return node.origLink + '#' + safeName;
-        } catch(e) {
-            return node.origLink; // 实在不行返回原样
-        }
+        } catch(e) { return node.origLink; }
     }
 
-    // 逆向构建 (针对 YAML 来源)
     try {
         if (node.type === 'vmess') {
             const vmessObj = {
@@ -194,15 +191,14 @@ const generateNodeLink = (node) => {
     return '';
 }
 
-// --- 核心：解析器 (修复版) ---
+// --- 核心：解析器 (兼容版) ---
 const parseNodesCommon = (text) => {
     let nodes = [];
-    // 尝试解码，如果失败则使用原文
     let decoded = deepBase64Decode(text);
-    if (!decoded) decoded = text;
+    // 如果解码失败（变为空或者乱码），则回退使用原始文本尝试解析
+    if (!decoded || decoded.length < 5) decoded = text;
 
-    // 1. YAML / Clash 解析 (严格模式)
-    // 只有明确包含 proxies 关键字才进入 YAML 模式
+    // 1. YAML / Clash 解析 (严格匹配 proxies 关键字)
     if (/^proxies:/m.test(decoded)) {
         try {
             const lines = decoded.split(/\r?\n/);
@@ -227,14 +223,12 @@ const parseNodesCommon = (text) => {
                              const m = block[i].match(/:\s*(?:['"](.*?)['"]|(.*?))$/);
                              return m ? (m[1] || m[2]).trim() : undefined;
                         }
-                        // 缩进检查，防止读出界
                         if (block[i].search(/\S/) <= block[parentIdx].search(/\S/)) break;
                     }
                     return undefined;
                 }
 
                 let type = getVal('type');
-                // 排除不支持的类型 (如 url-test, selector, direct 等)
                 if (!type || ['url-test', 'selector', 'fallback', 'direct', 'reject', 'load-balance'].includes(type)) return;
 
                 const node = {
@@ -280,81 +274,76 @@ const parseNodesCommon = (text) => {
             };
 
             for (const line of lines) {
-                // 跳过注释和空行
                 if (!line.trim() || line.trim().startsWith('#')) continue;
-                
-                // 严格的状态机
                 if (/^proxies:/i.test(line)) { inProxyBlock = true; continue; }
-                
-                // 如果遇到其他顶级 Key，退出 Proxy 块
                 if (inProxyBlock && /^[a-zA-Z0-9_-]+:/i.test(line) && !line.startsWith(' ')) {
                     if (blockBuffer.length > 0) processBlock(blockBuffer);
                     inProxyBlock = false;
                     blockBuffer = [];
-                    // 已经离开了 proxies 区域，直接中断循环，避免读取后面的 rule-providers
                     break;
                 }
-
                 if (inProxyBlock) {
                     if (line.trim().startsWith('-')) {
                         if (blockBuffer.length > 0) processBlock(blockBuffer);
-                        blockBuffer = [line.replace(/^(\s*)-\s*/, '$1  ')]; // 归一化缩进
+                        blockBuffer = [line.replace(/^(\s*)-\s*/, '$1  ')];
                         currentIndent = line.search(/\S/);
                     } else if (blockBuffer.length > 0) {
                         blockBuffer.push(line);
                     }
                 }
             }
-            if (blockBuffer.length > 0) processBlock(blockBuffer); // 处理最后一个
+            if (blockBuffer.length > 0) processBlock(blockBuffer);
         } catch (e) { console.error('YAML Parse Error', e); }
-        
         if (nodes.length > 0) return nodes;
     }
 
-    // 2. 常规链接解析 (严厉过滤)
-    // 移除 http/https，只保留明确的代理协议
-    const splitText = decoded.replace(/(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive):\/\//gi, '\n$1://');
-    const lines = splitText.split(/[\r\n]+/);
-    for (const line of lines) {
-        const trimLine = line.trim();
-        // 长度过短直接忽略
-        if (!trimLine || trimLine.length < 10) continue;
-        
-        // 必须以特定协议开头，彻底屏蔽 http/https
-        if (!/^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive):\/\//i.test(trimLine)) continue;
+    // 2. 常规链接解析 (Base64 / 纯文本)
+    // 关键修复：分别处理解码后的内容和原始内容，防止解码器误判导致数据丢失
+    const processText = (txt) => {
+        // 强制插入换行，防止所有链接在同一行
+        const splitText = txt.replace(/(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive):\/\//gi, '\n$1://');
+        const lines = splitText.split(/[\r\n]+/);
+        for (const line of lines) {
+            const trimLine = line.trim();
+            if (!trimLine || trimLine.length < 10) continue;
+            if (!/^(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive):\/\//i.test(trimLine)) continue;
 
-        try {
-            let node = { origLink: trimLine, type: 'raw' };
-            
-            if (trimLine.startsWith('vmess://')) {
-                const b64 = trimLine.substring(8);
-                const c = JSON.parse(safeBase64Decode(b64));
-                node.name = c.ps; node.type = 'vmess';
-            } else {
-                try {
-                    const url = new URL(trimLine);
-                    node.name = decodeURIComponent(url.hash.substring(1));
-                    node.type = url.protocol.replace(':', '');
-                    node.server = url.hostname;
-                    node.port = url.port;
-                } catch(e) {
-                    // 如果 URL 解析失败（比如 hysteria2 可能不符合标准 URL 规范），做个简单的正则提取作为保底
-                    const match = trimLine.match(/^(.*?):\/\/.*?#(.*?)$/);
-                    if (match) {
-                        node.name = decodeURIComponent(match[2]);
-                        node.type = match[1];
+            try {
+                // 如果已经存在相同的原始链接，跳过
+                if (nodes.some(n => n.origLink === trimLine)) continue;
+
+                let node = { origLink: trimLine, type: 'raw' };
+                if (trimLine.startsWith('vmess://')) {
+                    const b64 = trimLine.substring(8);
+                    const c = JSON.parse(safeBase64Decode(b64));
+                    node.name = c.ps; node.type = 'vmess';
+                } else {
+                    try {
+                        const url = new URL(trimLine);
+                        node.name = decodeURIComponent(url.hash.substring(1));
+                        node.type = url.protocol.replace(':', '');
+                        node.server = url.hostname;
+                        node.port = url.port;
+                    } catch(e) {
+                         const match = trimLine.match(/^(.*?):\/\/.*?#(.*?)$/);
+                        if (match) { node.name = decodeURIComponent(match[2]); node.type = match[1]; }
                     }
                 }
-            }
-            // 双重保险：如果没有名字，说明解析可能失败
-            if (!node.name) node.name = 'Node';
-            
-            node.link = generateNodeLink(node);
-            nodes.push(node);
-        } catch(e) {}
+                if (!node.name) node.name = 'Node';
+                node.link = generateNodeLink(node);
+                nodes.push(node);
+            } catch(e) {}
+        }
     }
 
-    return nodes.filter(n => n.link && n.link.length > 15); // 过滤极短的无效链接
+    // 优先处理解码后的文本
+    processText(decoded);
+    // 如果解码后没有找到节点，或者节点数量极少，尝试直接处理原文 (应对非Base64的纯文本订阅)
+    if (nodes.length === 0 && text !== decoded) {
+        processText(text);
+    }
+
+    return nodes;
 }
 
 // --- API 路由 ---

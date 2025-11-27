@@ -172,7 +172,7 @@ const generateNodeLink = (node) => {
     return '';
 }
 
-// --- Clash Meta Converter (Fixed: No undefined, correct spacing) ---
+// --- Clash Meta Converter (Robust) ---
 const toClashProxy = (node) => {
     try {
         if (!node.name || !node.server || !node.port) return null;
@@ -182,7 +182,7 @@ const toClashProxy = (node) => {
     port: ${node.port}`;
         
         if (node.type === 'ss') {
-            if (!node.cipher || !node.password || node.cipher === 'undefined' || node.password === 'undefined') return null;
+            if (!node.cipher || !node.password) return null;
             return `${common}
     type: ss
     cipher: ${node.cipher}
@@ -190,7 +190,7 @@ const toClashProxy = (node) => {
         }
         
         if (node.type === 'vmess') {
-            if (!node.uuid || node.uuid === 'undefined') return null;
+            if (!node.uuid) return null;
             let res = `${common}
     type: vmess
     uuid: ${node.uuid}
@@ -210,7 +210,7 @@ const toClashProxy = (node) => {
         }
         
         if (node.type === 'vless') {
-            if (!node.uuid || node.uuid === 'undefined') return null;
+            if (!node.uuid) return null;
             let res = `${common}
     type: vless
     uuid: ${node.uuid}
@@ -236,11 +236,11 @@ const toClashProxy = (node) => {
         }
         
         if (node.type === 'hysteria2') {
-            // Password can be empty in some auth modes, but usually required
             let res = `${common}
     type: hysteria2
-    password: ${node.password || ''}
     skip-cert-verify: ${node['skip-cert-verify'] || false}`;
+            // Only add fields if they exist
+            if (node.password) res += `\n    password: ${node.password}`;
             if (node.sni) res += `\n    sni: ${node.sni}`;
             if (node.obfs) {
                 res += `\n    obfs: ${node.obfs}`;
@@ -252,7 +252,7 @@ const toClashProxy = (node) => {
     } catch(e) { return null; }
 }
 
-// --- Universal Parser (Fixed: Better Regex for YAML) ---
+// --- Universal Parser ---
 const parseNodesCommon = (text) => {
     const nodes = [];
     const rawSet = new Set(); 
@@ -265,7 +265,6 @@ const parseNodesCommon = (text) => {
     let decoded = deepBase64Decode(text);
     if (!decoded || decoded.length < 5 || /[\x00-\x08]/.test(decoded)) decoded = text;
 
-    // 1. Regex Extraction (Base64/Raw Links)
     const linkRegex = /(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive):\/\/[^\s\n"']+/gi;
     const matches = decoded.match(linkRegex);
     if (matches) {
@@ -289,7 +288,6 @@ const parseNodesCommon = (text) => {
         }
     }
 
-    // 2. YAML Parsing (Fixed: Regex)
     if (nodes.length < 1 && (decoded.includes('proxies:') || decoded.includes('name:'))) {
         try {
             const lines = decoded.split(/\r?\n/);
@@ -314,7 +312,6 @@ const parseNodesCommon = (text) => {
                 };
                 const findInBlock = (key) => {
                     const line = block.find(l => l.includes(key)); if(!line) return undefined;
-                    // Stricter regex to avoid capturing too much
                     const m = line.match(new RegExp(`${key}:\\s*(?:['"](.*?)['"]|([^\\s{]+))`)); 
                     return m ? (m[1]||m[2]).trim() : undefined;
                 }
@@ -353,6 +350,7 @@ const parseNodesCommon = (text) => {
 app.get('/g/:token', async (c) => {
     const token = c.req.param('token');
     const format = c.req.query('format') || 'base64';
+    
     try {
         const group = await c.env.DB.prepare("SELECT * FROM groups WHERE token = ? AND status = 1").bind(token).first();
         if (!group) return c.text('Invalid Group Token', 404);
@@ -366,6 +364,9 @@ app.get('/g/:token', async (c) => {
         }
 
         let allNodes = [];
+        // Helper to check deduplication
+        const allNodeNamesSet = new Set();
+
         for (const item of targetConfig) {
             const sub = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE id = ?").bind(item.subId).first();
             if (!sub) continue; 
@@ -379,11 +380,20 @@ app.get('/g/:token', async (c) => {
             const nodes = parseNodesCommon(content);
             let allowed = 'all';
             if (item.include && Array.isArray(item.include) && item.include.length > 0) allowed = new Set(item.include);
+            
             for (const node of nodes) {
                 if (allowed !== 'all' && !allowed.has(node.name)) continue;
+                
+                // Deterministic Deduplication
                 let name = node.name.trim();
-                let i = 1; while (allNodes.some(n => n.name === name)) name = `${node.name} ${i++}`;
+                let i = 1; 
+                let originalName = name;
+                while (allNodeNamesSet.has(name)) {
+                    name = `${originalName} ${i++}`;
+                }
                 node.name = name;
+                allNodeNamesSet.add(name);
+
                 node.link = generateNodeLink(node);
                 allNodes.push(node);
             }
@@ -391,22 +401,28 @@ app.get('/g/:token', async (c) => {
 
         if (format === 'clash') {
             if (!clashConfig) return c.text("Clash config not found.", 404);
+            
             let yaml = (clashConfig.header || "") + "\n\nproxies:\n";
-            const nodeNames = [];
+            const validNodeNames = new Set();
+            
+            // 1. Generate Proxies
             for (const node of allNodes) {
                 const proxyYaml = toClashProxy(node);
                 if (proxyYaml) {
                     yaml += proxyYaml + "\n";
-                    nodeNames.push(node.name);
+                    validNodeNames.add(node.name);
                 }
             }
+
+            // 2. Generate Groups (With Validation)
             yaml += "\nproxy-groups:\n";
             if (clashConfig.groups && Array.isArray(clashConfig.groups)) {
                 for (const g of clashConfig.groups) {
                     yaml += `  - name: ${g.name}\n    type: ${g.type}\n    proxies:\n`;
                     if (g.proxies && Array.isArray(g.proxies)) {
                         g.proxies.forEach(p => {
-                            if (nodeNames.includes(p) || ['DIRECT', 'REJECT', 'NO-RESOLVE'].includes(p)) {
+                            // Filter: Only include if node exists OR is a special keyword
+                            if (validNodeNames.has(p) || ['DIRECT', 'REJECT', 'NO-RESOLVE'].includes(p)) {
                                 yaml += `      - ${p}\n`;
                             }
                         });

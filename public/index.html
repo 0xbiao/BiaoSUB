@@ -146,31 +146,51 @@
                 <h3 class="font-bold text-lg text-white mb-4">{{ groupModal.isEdit ? '编辑聚合组' : '新建聚合组' }}</h3>
                 <div class="tabs tabs-boxed bg-slate-900 mb-4">
                     <a class="tab" :class="{'tab-active': groupModal.tab==='base'}" @click="groupModal.tab='base'">基础配置 (V2Ray)</a>
-                    <a class="tab" :class="{'tab-active': groupModal.tab==='clash'}" @click="groupModal.tab='clash'">Clash 配置</a>
+                    <a class="tab" :class="{'tab-active': groupModal.tab==='clash'}" @click="groupModal.tab='clash'">Clash 配置 (独立)</a>
                 </div>
 
                 <div v-show="groupModal.tab==='base'" class="flex flex-col gap-4">
                     <input type="text" v-model="groupForm.name" placeholder="聚合组名称" class="input input-bordered w-full bg-slate-900" />
-                    <div class="text-sm text-slate-400">选择包含的资源：</div>
+                    <div class="text-sm text-slate-400">选择包含的资源 (V2Ray/Base64 专用)：</div>
                     <div class="max-h-96 overflow-y-auto custom-scrollbar bg-slate-900 rounded-lg border border-slate-700 p-2">
                         <div v-for="res in resources" :key="res.id" class="flex items-center justify-between p-3 border-b border-slate-800 last:border-none hover:bg-slate-800/50">
                             <label class="flex items-center gap-3 cursor-pointer flex-1">
-                                <input type="checkbox" :checked="isResSelected(res.id)" @change="toggleResSelection(res.id)" class="checkbox checkbox-accent checkbox-sm" />
+                                <input type="checkbox" :checked="isResSelected(groupForm.config, res.id)" @change="toggleResSelection(groupForm.config, res.id)" class="checkbox checkbox-accent checkbox-sm" />
                                 <span>{{ res.name }}</span>
                                 <span class="badge badge-xs" :class="res.type==='node'?'badge-secondary':'badge-primary'">{{ res.type }}</span>
                             </label>
-                            <div v-if="isResSelected(res.id)" class="flex items-center gap-2">
-                                <span class="text-xs text-slate-500">{{ getResSelectionCount(res.id) }}</span>
-                                <button @click="openNodeSelector(res)" class="btn btn-xs btn-outline btn-accent">筛选节点</button>
+                            <div v-if="isResSelected(groupForm.config, res.id)" class="flex items-center gap-2">
+                                <span class="text-xs text-slate-500">{{ getResSelectionCount(groupForm.config, res.id) }}</span>
+                                <button @click="openNodeSelector(res, groupForm.config)" class="btn btn-xs btn-outline btn-accent">筛选节点</button>
                             </div>
                         </div>
                     </div>
                 </div>
 
                 <div v-show="groupModal.tab==='clash'" class="flex flex-col gap-4">
+                    <div class="bg-slate-900 border border-slate-700 rounded-lg p-3">
+                        <div class="text-sm font-bold mb-2">选择包含的资源 (Clash 专用)：</div>
+                        <div class="max-h-48 overflow-y-auto custom-scrollbar">
+                            <div v-for="res in resources" :key="'clash-'+res.id" class="flex items-center justify-between p-2 border-b border-slate-800 last:border-none hover:bg-slate-800/50">
+                                <label class="flex items-center gap-3 cursor-pointer flex-1">
+                                    <input type="checkbox" :checked="isResSelected(groupForm.clash_config.resources, res.id)" @change="toggleResSelection(groupForm.clash_config.resources, res.id)" class="checkbox checkbox-secondary checkbox-sm" />
+                                    <span>{{ res.name }}</span>
+                                    <span class="badge badge-xs" :class="res.type==='node'?'badge-secondary':'badge-primary'">{{ res.type }}</span>
+                                </label>
+                                <div v-if="isResSelected(groupForm.clash_config.resources, res.id)" class="flex items-center gap-2">
+                                    <span class="text-xs text-slate-500">{{ getResSelectionCount(groupForm.clash_config.resources, res.id) }}</span>
+                                    <button @click="openNodeSelector(res, groupForm.clash_config.resources)" class="btn btn-xs btn-outline btn-secondary">筛选节点</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="collapse collapse-arrow bg-slate-900 border border-slate-700">
                         <input type="checkbox" /> 
-                        <div class="collapse-title text-sm font-bold">1. 头部配置 (Header)</div>
+                        <div class="collapse-title text-sm font-bold flex justify-between items-center">
+                            <span>1. 头部配置 (Header)</span>
+                            <button @click.stop="groupForm.clash_config.header=''" class="btn btn-xs btn-ghost text-error">清空</button>
+                        </div>
                         <div class="collapse-content">
                             <textarea v-model="groupForm.clash_config.header" class="code-editor w-full h-32 bg-[#1e1e1e] text-slate-300 p-2 outline-none resize-y rounded"></textarea>
                         </div>
@@ -201,7 +221,10 @@
 
                     <div class="collapse collapse-arrow bg-slate-900 border border-slate-700">
                         <input type="checkbox" /> 
-                        <div class="collapse-title text-sm font-bold">3. 分流规则 (Rules)</div>
+                        <div class="collapse-title text-sm font-bold flex justify-between items-center">
+                            <span>3. 分流规则 (Rules)</span>
+                            <button @click.stop="groupForm.clash_config.rules=''" class="btn btn-xs btn-ghost text-error">清空</button>
+                        </div>
                         <div class="collapse-content">
                             <textarea v-model="groupForm.clash_config.rules" class="code-editor w-full h-48 bg-[#1e1e1e] text-slate-300 p-2 outline-none resize-y rounded"></textarea>
                         </div>
@@ -241,7 +264,7 @@
         <dialog class="modal" :class="{ 'modal-open': clashNodeSelector.show }">
             <div class="modal-box bg-slate-800 border border-slate-700 max-w-2xl">
                 <h3 class="font-bold text-lg text-white mb-2">选择节点进入策略组</h3>
-                <div class="text-xs text-warning mb-2">* 此列表根据当前聚合组选中的资源实时生成，如果源节点名称变更，请重新配置。</div>
+                <div class="text-xs text-warning mb-2">* 此列表根据 Clash 配置中选中的资源实时生成。</div>
                 <div v-if="clashNodeSelector.loading" class="py-10 text-center"><span class="loading loading-spinner text-accent"></span> 加载所有节点中...</div>
                 <div v-else>
                     <div class="flex justify-between mb-2">
@@ -301,9 +324,9 @@ createApp({
         
         const resourceModal = reactive({ show: false, isEdit: false }); const resourceForm = ref({ name: '', url: '', type: 'subscription' })
         const groupModal = reactive({ show: false, isEdit: false, tab: 'base' }); 
-        const groupForm = ref({ id: null, name: '', config: [], clash_config: { header: '', groups: [], rules: '' } })
+        const groupForm = ref({ id: null, name: '', config: [], clash_config: { header: '', groups: [], rules: '', resources: [] } })
         
-        const nodeSelector = reactive({ show: false, loading: false, resourceId: null, resourceName: '', nodes: [], selected: 'all', tempSelected: [] })
+        const nodeSelector = reactive({ show: false, loading: false, resourceId: null, resourceName: '', nodes: [], selected: 'all', tempSelected: [], targetConfigList: null })
         const clashNodeSelector = reactive({ show: false, loading: false, currentGroup: null, allNodeNames: [], tempSelected: [] })
         
         const previewModal = reactive({ show: false, nodes: [] })
@@ -361,39 +384,44 @@ createApp({
             item.refreshing = false; loadResources()
         }
 
-        // Group Logic
+        // Group Logic (Generic for both lists)
         const openGroupModal = () => { 
             groupForm.value = { 
                 name: '', config: [], 
-                clash_config: { 
-                    header: "port: 7890\nallow-lan: true\nmode: rule\nlog-level: info\nexternal-controller: :9090", 
-                    groups: [{name: 'Proxy', type: 'select', proxies: []}], 
-                    rules: "rules:\n  - MATCH,Proxy" 
-                } 
+                clash_config: { header: "", groups: [{name: 'Proxy', type: 'select', proxies: []}], rules: "", resources: [] } 
             }; 
             groupModal.isEdit = false; groupModal.show = true; groupModal.tab = 'base' 
         }
         const editGroup = (g) => { 
             groupForm.value = JSON.parse(JSON.stringify(g)); 
-            if(!groupForm.value.clash_config) groupForm.value.clash_config = { header: "", groups: [], rules: "" };
+            // Ensure data integrity
+            if(!groupForm.value.clash_config) groupForm.value.clash_config = { header: "", groups: [], rules: "", resources: [] };
+            if(!groupForm.value.clash_config.resources) groupForm.value.clash_config.resources = [];
             groupModal.isEdit = true; groupModal.show = true; groupModal.tab = 'base'
         }
-        const isResSelected = (id) => groupForm.value.config.some(c => c.subId === id)
-        const getResSelectionCount = (id) => {
-            const c = groupForm.value.config.find(x => x.subId === id)
+        
+        // Generalized Selection Logic
+        const isResSelected = (list, id) => list.some(c => c.subId === id)
+        const getResSelectionCount = (list, id) => {
+            const c = list.find(x => x.subId === id)
             return (c && Array.isArray(c.include)) ? `已选 ${c.include.length} 个` : '包含所有'
         }
-        const toggleResSelection = (id) => {
-            const idx = groupForm.value.config.findIndex(x => x.subId === id)
-            if (idx > -1) groupForm.value.config.splice(idx, 1)
-            else groupForm.value.config.push({ subId: id, include: 'all' })
+        const toggleResSelection = (list, id) => {
+            const idx = list.findIndex(x => x.subId === id)
+            if (idx > -1) list.splice(idx, 1)
+            else list.push({ subId: id, include: 'all' })
         }
         const getResourceName = (id) => resources.value.find(r => r.id === id)?.name || '未知资源'
 
-        // V2Ray Node Selector
-        const openNodeSelector = async (res) => {
-            nodeSelector.resourceId = res.id; nodeSelector.resourceName = res.name; nodeSelector.show = true; nodeSelector.loading = true
-            const currentConf = groupForm.value.config.find(c => c.subId === res.id)
+        // Generic Node Selector (V2Ray & Clash Resources)
+        const openNodeSelector = async (res, targetList) => {
+            nodeSelector.resourceId = res.id; 
+            nodeSelector.resourceName = res.name; 
+            nodeSelector.targetConfigList = targetList; // Keep track of which list we are editing
+            nodeSelector.show = true; 
+            nodeSelector.loading = true;
+            
+            const currentConf = targetList.find(c => c.subId === res.id)
             const checkRes = await authFetch(API+'/check', { method: 'POST', body: JSON.stringify({url: res.url, type: res.type}) })
             const d = await checkRes.json()
             if(d.success && d.data.nodes) {
@@ -409,15 +437,16 @@ createApp({
             nodeSelector.loading = false
         }
         const confirmNodeSelection = () => {
-            const idx = groupForm.value.config.findIndex(x => x.subId === nodeSelector.resourceId)
+            // Find in the tracked list
+            const idx = nodeSelector.targetConfigList.findIndex(x => x.subId === nodeSelector.resourceId)
             if (idx > -1) {
-                if (nodeSelector.tempSelected.length === nodeSelector.nodes.length) groupForm.value.config[idx].include = 'all'
-                else groupForm.value.config[idx].include = nodeSelector.tempSelected
+                if (nodeSelector.tempSelected.length === nodeSelector.nodes.length) nodeSelector.targetConfigList[idx].include = 'all'
+                else nodeSelector.targetConfigList[idx].include = nodeSelector.tempSelected
             }
             nodeSelector.show = false
         }
 
-        // Clash Logic
+        // Clash Strategy Group Logic
         const addClashGroup = () => { groupForm.value.clash_config.groups.push({name: 'NewGroup', type: 'select', proxies: []}) }
         
         const openClashNodeSelector = async (group) => {
@@ -425,22 +454,18 @@ createApp({
             clashNodeSelector.show = true;
             clashNodeSelector.loading = true;
             
-            // 聚合当前所有选中的资源节点
+            // Use Clash Resources List
             let allNames = []
-            for(const conf of groupForm.value.config) {
+            for(const conf of groupForm.value.clash_config.resources) {
                 const res = resources.value.find(r => r.id === conf.subId)
                 if(!res) continue;
                 try {
-                    // 这里为了前端交互，我们暂时不调用后端 fetch，而是依赖 Check 接口 (可能会慢)
-                    // 或者如果资源有 info.nodes 就用 info，没有就 check
-                    // 简单起见，我们对所有选中的资源发起 check
                     const checkRes = await authFetch(API+'/check', { method: 'POST', body: JSON.stringify({url: res.url, type: res.type}) })
                     const d = await checkRes.json()
                     if(d.success && d.data.nodes) {
                         const allowed = (Array.isArray(conf.include)) ? new Set(conf.include) : 'all';
                         for(const n of d.data.nodes) {
                             if(allowed === 'all' || allowed.has(n.name)) {
-                                // 处理重名逻辑简单模拟
                                 let name = n.name.trim();
                                 let i=1; while(allNames.includes(name)) name = `${n.name} ${i++}`;
                                 allNames.push(name)

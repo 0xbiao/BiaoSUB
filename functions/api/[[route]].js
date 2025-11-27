@@ -55,32 +55,48 @@ const deepBase64Decode = (str, depth = 0) => {
     try {
         const clean = str.replace(/\s/g, '');
         if (clean.length < 10 || /[^A-Za-z0-9+/=_]/.test(clean)) return str;
+        
         let safeStr = clean.replace(/-/g, '+').replace(/_/g, '/');
         while (safeStr.length % 4) safeStr += '=';
-        let binary; try { binary = atob(safeStr); } catch(e) { return str; }
+        
+        let binary;
+        try { binary = atob(safeStr); } catch(e) { return str; }
+
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
         const decoded = new TextDecoder('utf-8').decode(bytes);
+
         if (decoded.includes('://') || decoded.includes('proxies:') || decoded.includes('server:') || decoded.includes('vmess://')) {
             return deepBase64Decode(decoded, depth + 1);
         }
         if (/[\x00-\x08\x0E-\x1F]/.test(decoded)) return str;
+        
         return decoded;
     } catch (e) { return str; }
 }
 
-// --- 核心：智能 Fetch ---
+// --- 核心：智能 Fetch (混合抓取模式) ---
 const extractUserInfo = (headers) => {
     let infoStr = null;
     headers.forEach((val, key) => { if (key.toLowerCase().includes('userinfo')) infoStr = val; });
+    
     if (!infoStr) return null;
+    
     const info = {};
     const parts = infoStr.split(/;|,\s*/);
-    parts.forEach(part => { const [key, value] = part.trim().split('='); if (key && value) info[key.trim().toLowerCase()] = Number(value); });
+    parts.forEach(part => { 
+        const [key, value] = part.trim().split('='); 
+        if (key && value) info[key.trim().toLowerCase()] = Number(value); 
+    });
+
     if (!info.total && !info.upload && !info.download) return null;
-    const usedRaw = (info.upload || 0) + (info.download || 0); const totalRaw = info.total || 0;
+    
+    const usedRaw = (info.upload || 0) + (info.download || 0);
+    const totalRaw = info.total || 0;
+    
     return {
-        used: formatBytes(usedRaw), total: totalRaw ? formatBytes(totalRaw) : '无限制',
+        used: formatBytes(usedRaw),
+        total: totalRaw ? formatBytes(totalRaw) : '无限制',
         expire: info.expire ? new Date(info.expire * 1000).toLocaleDateString() : '长期',
         percent: totalRaw ? Math.min(100, Math.round(usedRaw / totalRaw * 100)) : 0,
         raw_total: totalRaw, raw_used: usedRaw, raw_expire: info.expire
@@ -89,16 +105,21 @@ const extractUserInfo = (headers) => {
 
 const fetchWithSmartUA = async (url) => {
   const userAgents = ['v2rayNG/1.8.5', 'ClashMeta/1.0', 'Mozilla/5.0'];
-  let validRes = null; let foundInfo = null;
+  let validRes = null; // 存储有效的内容响应
+  let foundInfo = null; // 存储找到的流量信息
+
   for (const ua of userAgents) {
     try {
-      const controller = new AbortController(); const id = setTimeout(() => controller.abort(), 12000);
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), 12000);
       const res = await fetch(url, { headers: { 'User-Agent': ua }, signal: controller.signal, cache: 'no-store' });
       clearTimeout(id);
+      
       if (res.ok) {
         if (!foundInfo) foundInfo = extractUserInfo(res.headers);
         if (!validRes) {
-            const clone = res.clone(); const text = await clone.text();
+            const clone = res.clone();
+            const text = await clone.text();
             if (text.length > 50 && !text.includes('<!DOCTYPE html>')) {
                 Object.defineProperty(clone, 'prefetchedText', { value: text, writable: true });
                 validRes = clone;
@@ -108,13 +129,20 @@ const fetchWithSmartUA = async (url) => {
       }
     } catch (e) {}
   }
-  if (validRes) { if (foundInfo) Object.defineProperty(validRes, 'trafficInfo', { value: foundInfo, writable: true }); return validRes; }
+
+  if (validRes) {
+      if (foundInfo) {
+          Object.defineProperty(validRes, 'trafficInfo', { value: foundInfo, writable: true });
+      }
+      return validRes;
+  }
   return null;
 }
 
-// --- 核心：链接生成 (V2Ray) ---
+// --- 核心：生成链接 ---
 const generateNodeLink = (node) => {
     const safeName = encodeURIComponent(node.name || 'Node');
+
     if (node.origLink) {
         try {
             if (node.origLink.startsWith('vmess://')) {
@@ -129,6 +157,7 @@ const generateNodeLink = (node) => {
             return node.origLink + '#' + safeName;
         } catch(e) { return node.origLink; }
     }
+
     try {
         if (node.type === 'vmess') {
             const vmessObj = {
@@ -136,27 +165,33 @@ const generateNodeLink = (node) => {
                 aid: 0, scy: node.cipher || "auto", net: node.network || "tcp", type: "none", tls: node.tls ? "tls" : ""
             };
             if (node['ws-opts']) {
-                vmessObj.net = "ws"; vmessObj.path = node['ws-opts'].path;
+                vmessObj.net = "ws";
+                vmessObj.path = node['ws-opts'].path;
                 if (node['ws-opts'].headers && node['ws-opts'].headers.Host) vmessObj.host = node['ws-opts'].headers.Host;
             }
             return 'vmess://' + safeBase64Encode(JSON.stringify(vmessObj));
         }
+
         if (node.type === 'vless' || node.type === 'trojan') {
             const params = new URLSearchParams();
             params.set('security', node.tls ? (node.reality ? 'reality' : 'tls') : 'none');
-            if (node.network) params.set('type', node.network); if (node.flow) params.set('flow', node.flow);
+            if (node.network) params.set('type', node.network);
+            if (node.flow) params.set('flow', node.flow);
             if (node.sni || node.servername) params.set('sni', node.sni || node.servername);
             if (node['client-fingerprint']) params.set('fp', node['client-fingerprint']);
+            
             if (node.network === 'ws' && node['ws-opts']) {
                 if (node['ws-opts'].path) params.set('path', node['ws-opts'].path);
                 if (node['ws-opts'].headers && node['ws-opts'].headers.Host) params.set('host', node['ws-opts'].headers.Host);
             }
             if (node.reality && node.reality.publicKey) {
-                params.set('pbk', node.reality.publicKey); if (node.reality.shortId) params.set('sid', node.reality.shortId);
+                params.set('pbk', node.reality.publicKey);
+                if (node.reality.shortId) params.set('sid', node.reality.shortId);
             }
             const userInfo = (node.type === 'vless') ? node.uuid : (node.password || node.uuid);
             return `${node.type}://${userInfo}@${node.server}:${node.port}?${params.toString()}#${safeName}`;
         }
+
         if (node.type === 'hysteria2') {
             const params = new URLSearchParams();
             if (node.sni) params.set('sni', node.sni);
@@ -164,6 +199,7 @@ const generateNodeLink = (node) => {
             if (node.obfs) { params.set('obfs', node.obfs); if (node['obfs-password']) params.set('obfs-password', node['obfs-password']); }
             return `hysteria2://${node.password}@${node.server}:${node.port}?${params.toString()}#${safeName}`;
         }
+        
         if (node.type === 'ss') {
              const userPart = safeBase64Encode(`${node.cipher}:${node.password}`);
              return `ss://${userPart}@${node.server}:${node.port}#${safeName}`;
@@ -172,7 +208,7 @@ const generateNodeLink = (node) => {
     return '';
 }
 
-// --- 核心：Clash Meta 转换器 (对象 -> YAML块) ---
+// --- 核心：Clash Meta 转换器 ---
 const toClashProxy = (node) => {
     try {
         const common = `  - name: ${node.name}
@@ -239,7 +275,6 @@ const toClashProxy = (node) => {
             }
             return res;
         }
-        // 兜底：如果是不支持的类型，暂不输出
         return null;
     } catch(e) { return null; }
 }
@@ -248,18 +283,21 @@ const toClashProxy = (node) => {
 const parseNodesCommon = (text) => {
     const nodes = [];
     const rawSet = new Set(); 
+
     const addNode = (n) => {
         if (!n.link) n.link = generateNodeLink(n);
         if (n.link && n.link.length > 15 && !rawSet.has(n.link)) {
-            rawSet.add(n.link); nodes.push(n);
+            rawSet.add(n.link);
+            nodes.push(n);
         }
     }
+
     let decoded = deepBase64Decode(text);
     if (!decoded || decoded.length < 5 || /[\x00-\x08]/.test(decoded)) decoded = text;
 
-    // 1. 暴力正则提取
     const linkRegex = /(vmess|vless|ss|ssr|trojan|hysteria|hysteria2|tuic|juicity|naive):\/\/[^\s\n"']+/gi;
     const matches = decoded.match(linkRegex);
+    
     if (matches) {
         for (const match of matches) {
             const trimLine = match.trim();
@@ -270,10 +308,16 @@ const parseNodesCommon = (text) => {
                     const c = JSON.parse(safeBase64Decode(b64));
                     node.name = c.ps; node.type = 'vmess';
                 } else {
-                    const url = new URL(trimLine);
-                    node.name = decodeURIComponent(url.hash.substring(1));
-                    node.type = url.protocol.replace(':', '');
-                    node.server = url.hostname; node.port = url.port;
+                    try {
+                        const url = new URL(trimLine);
+                        node.name = decodeURIComponent(url.hash.substring(1));
+                        node.type = url.protocol.replace(':', '');
+                        node.server = url.hostname;
+                        node.port = url.port;
+                    } catch(e) {
+                        const m = trimLine.match(/#(.*?)$/);
+                        if(m) node.name = decodeURIComponent(m[1]);
+                    }
                 }
                 if (!node.name) node.name = 'Node';
                 addNode(node);
@@ -281,20 +325,24 @@ const parseNodesCommon = (text) => {
         }
     }
 
-    // 2. YAML 解析补漏
     if (nodes.length < 1 && (decoded.includes('proxies:') || decoded.includes('name:'))) {
         try {
             const lines = decoded.split(/\r?\n/);
-            let inProxyBlock = false; let currentBlock = [];
+            let inProxyBlock = false;
+            let currentBlock = [];
+
             const processYamlBlock = (block) => {
                 const getVal = (k) => {
                     const reg = new RegExp(`${k}:\\s*(?:['"](.*?)['"]|(.*?))(?:$|#|,|})`, 'i');
                     const line = block.find(l => reg.test(l));
                     if (!line) return undefined;
-                    const m = line.match(reg); return (m[1] || m[2]).trim();
+                    const m = line.match(reg);
+                    return (m[1] || m[2]).trim();
                 };
+                
                 let type = getVal('type');
                 if (!type || ['url-test', 'selector', 'fallback', 'direct', 'reject', 'load-balance'].includes(type)) return;
+
                 const node = {
                     name: getVal('name'), type, server: getVal('server'), port: getVal('port'),
                     uuid: getVal('uuid'), cipher: getVal('cipher'), password: getVal('password'),
@@ -304,20 +352,29 @@ const parseNodesCommon = (text) => {
                     network: getVal('network'), flow: getVal('flow'),
                     "client-fingerprint": getVal('client-fingerprint')
                 };
+
                 const findInBlock = (key) => {
-                    const line = block.find(l => l.includes(key)); if(!line) return undefined;
-                    const m = line.match(/:\s*(?:['"](.*?)['"]|(.*?))$/); return m ? (m[1]||m[2]).trim() : undefined;
+                    const line = block.find(l => l.includes(key));
+                    if(!line) return undefined;
+                    const m = line.match(/:\s*(?:['"](.*?)['"]|(.*?))$/);
+                    return m ? (m[1]||m[2]).trim() : undefined;
                 }
+
                 if(node.network === 'ws' || block.some(l=>l.includes('ws-opts'))) {
                     node.network = 'ws';
-                    node['ws-opts'] = { path: findInBlock('path') || '/', headers: { Host: findInBlock('Host') || '' } };
+                    node['ws-opts'] = { 
+                        path: findInBlock('path') || '/', 
+                        headers: { Host: findInBlock('Host') || '' } 
+                    };
                 }
                 if(block.some(l=>l.includes('public-key'))) {
                     node.tls = true;
                     node.reality = { publicKey: findInBlock('public-key'), shortId: findInBlock('short-id') };
                 }
+
                 if (node.server && node.port) addNode(node);
             }
+
             for (const line of lines) {
                 if (!line.trim() || line.trim().startsWith('#')) continue;
                 if (line.includes('proxies:')) { inProxyBlock = true; continue; }
@@ -325,7 +382,9 @@ const parseNodesCommon = (text) => {
                     if (line.trim().startsWith('-') && line.includes('name:')) {
                         if (currentBlock.length > 0) processYamlBlock(currentBlock);
                         currentBlock = [line];
-                    } else if (currentBlock.length > 0) currentBlock.push(line);
+                    } else if (currentBlock.length > 0) {
+                        currentBlock.push(line);
+                    }
                     if (!line.startsWith(' ') && !line.startsWith('-') && !line.includes('proxies:')) {
                         inProxyBlock = false;
                         if (currentBlock.length > 0) processYamlBlock(currentBlock);
@@ -336,10 +395,11 @@ const parseNodesCommon = (text) => {
             if (currentBlock.length > 0) processYamlBlock(currentBlock);
         } catch (e) {}
     }
+
     return nodes;
 }
 
-// --- 核心路由 ---
+// --- 核心路由：聚合组订阅入口 ---
 app.get('/g/:token', async (c) => {
     const token = c.req.param('token');
     const format = c.req.query('format') || 'base64';
@@ -348,13 +408,20 @@ app.get('/g/:token', async (c) => {
         const group = await c.env.DB.prepare("SELECT * FROM groups WHERE token = ? AND status = 1").bind(token).first();
         if (!group) return c.text('Invalid Group Token', 404);
         
-        const config = JSON.parse(group.config || '[]');
+        const baseConfig = JSON.parse(group.config || '[]');
         const clashConfig = group.clash_config ? JSON.parse(group.clash_config) : null;
 
+        // 关键逻辑修改：Clash 格式时，尝试使用独立的资源配置
+        let targetConfig = baseConfig;
+        if (format === 'clash' && clashConfig && clashConfig.resources && clashConfig.resources.length > 0) {
+            targetConfig = clashConfig.resources;
+        }
+
         let allNodes = [];
-        for (const item of config) {
+        for (const item of targetConfig) {
             const sub = await c.env.DB.prepare("SELECT * FROM subscriptions WHERE id = ?").bind(item.subId).first();
             if (!sub) continue; 
+            
             let content = "";
             if (sub.type === 'node') { content = sub.url; } 
             else {
@@ -362,27 +429,30 @@ app.get('/g/:token', async (c) => {
                 if (res && res.ok) content = res.prefetchedText || await res.text();
             }
             if (!content) continue;
+
             const nodes = parseNodesCommon(content);
             let allowed = 'all';
             if (item.include && Array.isArray(item.include) && item.include.length > 0) allowed = new Set(item.include);
+
             for (const node of nodes) {
                 if (allowed !== 'all' && !allowed.has(node.name)) continue;
+                
                 let name = node.name.trim();
-                let i = 1; while (allNodes.some(n => n.name === name)) name = `${node.name} ${i++}`;
+                let i = 1;
+                while (allNodes.some(n => n.name === name)) name = `${node.name} ${i++}`;
                 node.name = name;
-                node.link = generateNodeLink(node); // 生成 V2 Link
+                node.link = generateNodeLink(node);
                 allNodes.push(node);
             }
         }
 
-        // --- Clash 输出逻辑 ---
+        // --- Clash 输出 ---
         if (format === 'clash') {
             if (!clashConfig) return c.text("Clash config not found for this group.", 404);
             
             let yaml = (clashConfig.header || "") + "\n\nproxies:\n";
             const nodeNames = [];
             
-            // 1. 生成节点
             for (const node of allNodes) {
                 const proxyYaml = toClashProxy(node);
                 if (proxyYaml) {
@@ -391,15 +461,12 @@ app.get('/g/:token', async (c) => {
                 }
             }
 
-            // 2. 生成策略组
             yaml += "\nproxy-groups:\n";
             if (clashConfig.groups && Array.isArray(clashConfig.groups)) {
                 for (const g of clashConfig.groups) {
                     yaml += `  - name: ${g.name}\n    type: ${g.type}\n    proxies:\n`;
-                    // 默认添加
                     if (g.proxies && Array.isArray(g.proxies)) {
                         g.proxies.forEach(p => {
-                            // 检查节点是否存在于当前集合中 (防止空指针)
                             if (nodeNames.includes(p) || ['DIRECT', 'REJECT', 'NO-RESOLVE'].includes(p)) {
                                 yaml += `      - ${p}\n`;
                             }
@@ -408,13 +475,12 @@ app.get('/g/:token', async (c) => {
                 }
             }
 
-            // 3. 规则
-            yaml += "\n" + (clashConfig.rules || "rules:\n  - MATCH,DIRECT");
+            yaml += "\n" + (clashConfig.rules || "");
             
             return c.text(yaml, 200, { 'Content-Type': 'text/yaml; charset=utf-8' });
         }
 
-        // --- Base64 输出逻辑 ---
+        // --- Base64 输出 ---
         const links = allNodes.map(n => n.link).join('\n');
         return c.text(safeBase64Encode(links), 200, { 'Content-Type': 'text/plain; charset=utf-8' });
 
@@ -439,23 +505,20 @@ app.put('/subs/:id', async (c) => {
 app.delete('/subs/:id', async (c) => { await c.env.DB.prepare("DELETE FROM subscriptions WHERE id=?").bind(c.req.param('id')).run(); return c.json({success:true}) })
 app.post('/sort', async (c) => { const {ids}=await c.req.json(); const s=c.env.DB.prepare("UPDATE subscriptions SET sort_order=? WHERE id=?"); await c.env.DB.batch(ids.map((id,i)=>s.bind(i,id))); return c.json({success:true}) })
 
-// --- 聚合组管理 (增加 clash_config 处理) ---
+// --- 聚合组管理 ---
 app.get('/groups', async (c) => { 
     const {results} = await c.env.DB.prepare("SELECT * FROM groups ORDER BY sort_order ASC, id DESC").all(); 
     return c.json({success:true, data:results.map(g => ({
         ...g, 
         config: JSON.parse(g.config||'[]'),
-        clash_config: g.clash_config ? JSON.parse(g.clash_config) : { 
-            header: "port: 7890\nallow-lan: true\nmode: rule\nlog-level: info\nexternal-controller: :9090", 
-            groups: [], 
-            rules: "rules:\n  - MATCH,DIRECT" 
-        }
+        // 确保 clash_config 结构完整，包含 resources 字段
+        clash_config: g.clash_config ? JSON.parse(g.clash_config) : { header: "", groups: [], rules: "", resources: [] }
     }))}) 
 })
 app.post('/groups', async (c) => { 
     const b=await c.req.json(); 
     const token = generateToken();
-    const clashConfig = b.clash_config || { header: "", groups: [], rules: "" };
+    const clashConfig = b.clash_config || { header: "", groups: [], rules: "", resources: [] };
     await c.env.DB.prepare("INSERT INTO groups (name, token, config, clash_config, status, sort_order) VALUES (?, ?, ?, ?, 1, 0)")
         .bind(b.name, token, JSON.stringify(b.config||[]), JSON.stringify(clashConfig)).run(); 
     return c.json({success:true}) 

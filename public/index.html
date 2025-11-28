@@ -120,7 +120,7 @@
                         <div v-else class="text-xs text-slate-600 italic">V2Ray: 未选择资源</div>
                         
                         <div class="mt-2 text-xs" v-if="group.clash_config">
-                            <span v-if="group.clash_config.mode === 'raw'" class="text-success">Clash: 托管模式</span>
+                            <span v-if="group.clash_config.mode === 'raw'" class="text-success">Clash: 托管配置模式</span>
                             <span v-else class="text-slate-500">Clash: 资源 {{group.clash_config.resources ? group.clash_config.resources.length : 0}} 个</span>
                         </div>
                     </div>
@@ -150,7 +150,11 @@
         <dialog class="modal" :class="{ 'modal-open': groupModal.show }">
             <div class="modal-box bg-slate-800 border border-slate-700 max-w-4xl w-11/12">
                 <h3 class="font-bold text-lg text-white mb-4">{{ groupModal.isEdit ? '编辑聚合组' : '新建聚合组' }}</h3>
-                <input type="text" v-model="groupForm.name" placeholder="聚合组名称" class="input input-bordered w-full bg-slate-900 mb-4" />
+                <div class="form-control w-full mb-4">
+                    <label class="label"><span class="label-text text-white">聚合组名称 <span class="text-error">*</span></span></label>
+                    <input type="text" v-model="groupForm.name" placeholder="请输入聚合组名称 (必填)" class="input input-bordered w-full bg-slate-900" :class="{'input-error': groupNameError}" @input="groupNameError = false" />
+                    <label class="label" v-if="groupNameError"><span class="label-text-alt text-error">名称不能为空，此名称将用作 Clash 配置文件名</span></label>
+                </div>
                 
                 <div class="tabs tabs-boxed bg-slate-900 mb-4">
                     <a class="tab" :class="{'tab-active': groupModal.tab==='base'}" @click="groupModal.tab='base'">基础配置 (V2Ray)</a>
@@ -243,7 +247,7 @@
                     <div class="alert alert-info shadow-lg text-xs">
                         <div>
                             <i class="fa-solid fa-info-circle"></i>
-                            <span>在此模式下，Clash 订阅将直接返回下方输入的内容，不进行任何自动生成。V2Ray 订阅不受影响。</span>
+                            <span>启用托管模式后，Clash 订阅将直接返回下方内容。请点击“导入配置”选择本地 .yaml 文件（文件需 < 2MB）。</span>
                         </div>
                     </div>
                     <div class="form-control">
@@ -253,7 +257,15 @@
                         </label>
                     </div>
                     <div v-if="groupForm.clash_config.mode === 'raw'">
-                        <textarea v-model="groupForm.clash_config.raw_yaml" placeholder="在此粘贴完整的 YAML 配置文件内容..." class="code-editor w-full h-96 bg-[#1e1e1e] text-slate-300 p-4 outline-none resize-y rounded border border-slate-700"></textarea>
+                        <div class="flex justify-between items-center mb-2">
+                             <span class="text-xs text-slate-400">配置内容预览:</span>
+                             <div class="flex gap-2">
+                                 <input type="file" ref="fileInput" accept=".yaml,.yml" class="hidden" @change="handleYamlImport" />
+                                 <button class="btn btn-xs btn-accent" @click="$refs.fileInput.click()"><i class="fa-solid fa-file-import"></i> 导入配置 (YAML)</button>
+                                 <button class="btn btn-xs btn-ghost text-error" @click="groupForm.clash_config.raw_yaml = ''">清空</button>
+                             </div>
+                        </div>
+                        <textarea v-model="groupForm.clash_config.raw_yaml" placeholder="请点击上方按钮导入 .yaml 配置文件..." class="code-editor w-full h-96 bg-[#1e1e1e] text-slate-300 p-4 outline-none resize-y rounded border border-slate-700" readonly></textarea>
                     </div>
                 </div>
 
@@ -351,6 +363,7 @@ createApp({
         const resourceModal = reactive({ show: false, isEdit: false }); const resourceForm = ref({ name: '', url: '', type: 'subscription' })
         const groupModal = reactive({ show: false, isEdit: false, tab: 'base' }); 
         const groupForm = ref({ id: null, name: '', config: [], clash_config: { mode: 'generate', header: '', groups: [], rules: '', resources: [], raw_yaml: '' } })
+        const groupNameError = ref(false)
         
         const nodeSelector = reactive({ show: false, loading: false, resourceId: null, resourceName: '', nodes: [], selected: 'all', tempSelected: [], targetConfigList: null })
         const clashNodeSelector = reactive({ show: false, loading: false, currentGroup: null, allNodeNames: [], tempSelected: [] })
@@ -413,10 +426,12 @@ createApp({
                 name: '', config: [], 
                 clash_config: { mode: 'generate', header: "", groups: [{name: 'Proxy', type: 'select', proxies: []}], rules: "", resources: [], raw_yaml: "" } 
             }; 
+            groupNameError.value = false;
             groupModal.isEdit = false; groupModal.show = true; groupModal.tab = 'base' 
         }
         const editGroup = (g) => { 
             groupForm.value = JSON.parse(JSON.stringify(g)); 
+            groupNameError.value = false;
             if(!groupForm.value.clash_config) groupForm.value.clash_config = { mode: 'generate', header: "", groups: [], rules: "", resources: [], raw_yaml: "" };
             if(!groupForm.value.clash_config.resources) groupForm.value.clash_config.resources = [];
             groupModal.isEdit = true; groupModal.show = true; groupModal.tab = 'base'
@@ -427,7 +442,6 @@ createApp({
             const c = list.find(x => x.subId === id)
             return (c && Array.isArray(c.include)) ? `已选 ${c.include.length} 个` : '包含所有'
         }
-        // 修复：统计所有资源数量
         const getGroupResourceCount = (g) => {
             let count = (g.config ? g.config.length : 0);
             if(g.clash_config && g.clash_config.resources) count += g.clash_config.resources.length;
@@ -501,7 +515,29 @@ createApp({
             clashNodeSelector.show = false
         }
 
+        const handleYamlImport = (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            if (file.size > 2 * 1024 * 1024) {
+                alert("文件大小不能超过 2MB，以免数据库写入失败。");
+                event.target.value = ''; 
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                groupForm.value.clash_config.raw_yaml = e.target.result;
+                showToast("配置导入成功", "success");
+            };
+            reader.readAsText(file);
+            event.target.value = '';
+        }
+
         const saveGroup = async () => {
+            if (!groupForm.value.name || !groupForm.value.name.trim()) {
+                groupNameError.value = true;
+                showToast('必须填写聚合组名称', 'error');
+                return;
+            }
             submitting.value = true
             const method = groupModal.isEdit ? 'PUT' : 'POST'
             const url = groupModal.isEdit ? `${API}/groups/${groupForm.value.id}` : `${API}/groups`
@@ -532,7 +568,7 @@ createApp({
             isLoggedIn, loginPassword, loginLoading, handleLogin, logout,
             currentTab, resources, groups, submitting, toast,
             resourceModal, resourceForm, openResourceModal, editResource, saveResource, deleteResource, refreshResource,
-            groupModal, groupForm, openGroupModal, editGroup, saveGroup, deleteGroup, refreshToken, copyGroupLink, getGroupResourceCount,
+            groupModal, groupForm, groupNameError, openGroupModal, editGroup, saveGroup, deleteGroup, refreshToken, copyGroupLink, getGroupResourceCount, handleYamlImport,
             isResSelected, getResSelectionCount, toggleResSelection, getResourceName,
             nodeSelector, openNodeSelector, confirmNodeSelection,
             clashNodeSelector, addClashGroup, openClashNodeSelector, clashSelectAll, confirmClashNodeSelection,
